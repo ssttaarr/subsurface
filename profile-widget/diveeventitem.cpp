@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "profile-widget/diveeventitem.h"
 #include "qt-models/diveplotdatamodel.h"
 #include "profile-widget/divecartesianaxis.h"
@@ -6,11 +7,13 @@
 #include "core/profile.h"
 #include "core/gettextfromc.h"
 #include "core/metrics.h"
+#include "core/membuffer.h"
+#include "core/subsurface-string.h"
 
 extern struct ev_select *ev_namelist;
 extern int evn_used;
 
-DiveEventItem::DiveEventItem(QObject *parent) : DivePixmapItem(parent),
+DiveEventItem::DiveEventItem(QGraphicsItem *parent) : DivePixmapItem(parent),
 	vAxis(NULL),
 	hAxis(NULL),
 	dataModel(NULL),
@@ -48,19 +51,19 @@ struct event *DiveEventItem::getEvent()
 	return internalEvent;
 }
 
-void DiveEventItem::setEvent(struct event *ev)
+void DiveEventItem::setEvent(struct event *ev, struct gasmix *lastgasmix)
 {
 	if (!ev)
 		return;
 
 	free(internalEvent);
 	internalEvent = clone_event(ev);
-	setupPixmap();
-	setupToolTipString();
+	setupPixmap(lastgasmix);
+	setupToolTipString(lastgasmix);
 	recalculatePos(true);
 }
 
-void DiveEventItem::setupPixmap()
+void DiveEventItem::setupPixmap(struct gasmix *lastgasmix)
 {
 	const IconMetrics& metrics = defaultIconMetrics();
 #ifndef SUBSURFACE_MOBILE
@@ -70,17 +73,49 @@ void DiveEventItem::setupPixmap()
 	 // on iOS devices we need to adjust for Device Pixel Ratio
 	int sz_bigger = metrics.sz_med  * metrics.dpr;
 #else
-	int sz_bigger = metrics.sz_med;
+	// SUBSURFACE_MOBILE, seems a little big from the code,
+	// but looks fine on device
+	int sz_bigger = metrics.sz_big + metrics.sz_med;
 #endif
 #endif
 	int sz_pix = sz_bigger/2; // ex 20px
 
 #define EVENT_PIXMAP(PIX) QPixmap(QString(PIX)).scaled(sz_pix, sz_pix, Qt::KeepAspectRatio, Qt::SmoothTransformation)
 #define EVENT_PIXMAP_BIGGER(PIX) QPixmap(QString(PIX)).scaled(sz_bigger, sz_bigger, Qt::KeepAspectRatio, Qt::SmoothTransformation)
-	if (same_string(internalEvent->name, "")) {
-		setPixmap(EVENT_PIXMAP(":warning-icon"));
+	if (empty_string(internalEvent->name)) {
+		setPixmap(EVENT_PIXMAP(":status-warning-icon"));
+	} else if (same_string_caseinsensitive(internalEvent->name, "modechange")) {
+		if (internalEvent->value == 0)
+			setPixmap(EVENT_PIXMAP(":bailout-icon"));
+		else
+			setPixmap(EVENT_PIXMAP(":onCCRLoop-icon"));
 	} else if (internalEvent->type == SAMPLE_EVENT_BOOKMARK) {
-		setPixmap(EVENT_PIXMAP(":flag"));
+		setPixmap(EVENT_PIXMAP(":dive-bookmark-icon"));
+	} else if (event_is_gaschange(internalEvent)) {
+		struct gasmix *mix = get_gasmix_from_event(&displayed_dive, internalEvent);
+		struct icd_data icd_data;
+		bool icd = isobaric_counterdiffusion(lastgasmix, mix, &icd_data);
+		if (mix->he.permille) {
+			if (icd)
+				setPixmap(EVENT_PIXMAP_BIGGER(":gaschange-trimix-ICD-icon"));
+			else
+				setPixmap(EVENT_PIXMAP_BIGGER(":gaschange-trimix-icon"));
+		} else if (gasmix_is_air(mix)) {
+			if (icd)
+				setPixmap(EVENT_PIXMAP_BIGGER(":gaschange-air-ICD-icon"));
+			else
+				setPixmap(EVENT_PIXMAP_BIGGER(":gaschange-air-icon"));
+		} else if (mix->o2.permille == 1000) {
+			if (icd)
+				setPixmap(EVENT_PIXMAP_BIGGER(":gaschange-oxygen-ICD-icon"));
+			else
+				setPixmap(EVENT_PIXMAP_BIGGER(":gaschange-oxygen-icon"));
+		} else {
+			if (icd)
+				setPixmap(EVENT_PIXMAP_BIGGER(":gaschange-ean-ICD-icon"));
+			else
+				setPixmap(EVENT_PIXMAP_BIGGER(":gaschange-ean-icon"));
+		}
 #ifdef SAMPLE_FLAGS_SEVERITY_SHIFT
 	} else if ((((internalEvent->flags & SAMPLE_FLAGS_SEVERITY_MASK) >> SAMPLE_FLAGS_SEVERITY_SHIFT) == 1) ||
 		    // those are useless internals of the dive computer
@@ -99,21 +134,13 @@ void DiveEventItem::setupPixmap()
 		QPixmap transparentPixmap(4, 20);
 		transparentPixmap.fill(QColor::fromRgbF(1.0, 1.0, 1.0, 0.01));
 		setPixmap(transparentPixmap);
-	} else if (event_is_gaschange(internalEvent)) {
-		struct gasmix *mix = get_gasmix_from_event(&displayed_dive, internalEvent);
-		if (mix->he.permille)
-			setPixmap(EVENT_PIXMAP_BIGGER(":gaschangeTrimix"));
-		else if (gasmix_is_air(mix))
-			setPixmap(EVENT_PIXMAP_BIGGER(":gaschangeAir"));
-		else
-			setPixmap(EVENT_PIXMAP_BIGGER(":gaschangeNitrox"));
 #ifdef SAMPLE_FLAGS_SEVERITY_SHIFT
 	} else if (((internalEvent->flags & SAMPLE_FLAGS_SEVERITY_MASK) >> SAMPLE_FLAGS_SEVERITY_SHIFT) == 2) {
-		setPixmap(EVENT_PIXMAP(":info-icon"));
+		setPixmap(EVENT_PIXMAP(":status-info-icon"));
 	} else if (((internalEvent->flags & SAMPLE_FLAGS_SEVERITY_MASK) >> SAMPLE_FLAGS_SEVERITY_SHIFT) == 3) {
-		setPixmap(EVENT_PIXMAP(":warning-icon"));
+		setPixmap(EVENT_PIXMAP(":status-warning-icon"));
 	} else if (((internalEvent->flags & SAMPLE_FLAGS_SEVERITY_MASK) >> SAMPLE_FLAGS_SEVERITY_SHIFT) == 4) {
-		setPixmap(EVENT_PIXMAP(":violation-icon"));
+		setPixmap(EVENT_PIXMAP(":status-violation-icon"));
 #endif
 	} else if (same_string_caseinsensitive(internalEvent->name, "violation") || // generic libdivecomputer
 		   same_string_caseinsensitive(internalEvent->name, "Safety stop violation")  || // the rest are from the Uemis downloader
@@ -122,60 +149,76 @@ void DiveEventItem::setupPixmap()
 		   same_string_caseinsensitive(internalEvent->name, "Dive time alert")  ||
 		   same_string_caseinsensitive(internalEvent->name, "Low battery alert")  ||
 		   same_string_caseinsensitive(internalEvent->name, "Speed alarm")) {
-		setPixmap(EVENT_PIXMAP(":violation-icon"));
+		setPixmap(EVENT_PIXMAP(":status-violation-icon"));
 	} else if (same_string_caseinsensitive(internalEvent->name, "non stop time") || // generic libdivecomputer
 		   same_string_caseinsensitive(internalEvent->name, "safety stop") ||
 		   same_string_caseinsensitive(internalEvent->name, "safety stop (voluntary)") ||
 		   same_string_caseinsensitive(internalEvent->name, "Tank change suggested") || // Uemis downloader
 		   same_string_caseinsensitive(internalEvent->name, "Marker")) {
-		setPixmap(EVENT_PIXMAP(":info-icon"));
+		setPixmap(EVENT_PIXMAP(":status-info-icon"));
 	} else {
 		// we should do some guessing based on the type / name of the event;
 		// for now they all get the warning icon
-		setPixmap(EVENT_PIXMAP(":warning-icon"));
+		setPixmap(EVENT_PIXMAP(":status-warning-icon"));
 	}
 #undef EVENT_PIXMAP
 #undef EVENT_PIXMAP_BIGGER
 }
 
-void DiveEventItem::setupToolTipString()
+void DiveEventItem::setupToolTipString(struct gasmix *lastgasmix)
 {
 	// we display the event on screen - so translate
-	QString name = gettextFromC::instance()->tr(internalEvent->name);
+	QString name = gettextFromC::tr(internalEvent->name);
 	int value = internalEvent->value;
 	int type = internalEvent->type;
 
 	if (event_is_gaschange(internalEvent)) {
+		struct icd_data icd_data;
 		struct gasmix *mix = get_gasmix_from_event(&displayed_dive, internalEvent);
+		struct membuffer mb = {};
 		name += ": ";
 		name += gasname(mix);
 
 		/* Do we have an explicit cylinder index?  Show it. */
 		if (internalEvent->gas.index >= 0)
-			name += QString(" (cyl %1)").arg(internalEvent->gas.index+1);
-	} else if (value) {
-		if (type == SAMPLE_EVENT_PO2 && name == "SP change") {
-			name += QString(":%1").arg((double)value / 1000);
-		} else {
-			name += QString(":%1").arg(value);
+			name += tr(" (cyl. %1)").arg(internalEvent->gas.index + 1);
+		bool icd = isobaric_counterdiffusion(lastgasmix, mix, &icd_data);
+		if (icd_data.dHe < 0) {
+			put_format(&mb, "\n%s %s:%+.3g%% %s:%+.3g%%%s%+.3g%%",
+				qPrintable(tr("ICD")),
+				qPrintable(tr("ΔHe")), icd_data.dHe / 10.0,
+				qPrintable(tr("ΔN₂")), icd_data.dN2 / 10.0,
+				icd ? ">" : "<", lrint(-icd_data.dHe / 5.0) / 10.0);
+			name += QString::fromUtf8(mb.buffer, mb.len);
+			free_buffer(&mb);
 		}
-	} else if (type == SAMPLE_EVENT_PO2 && name == "SP change") {
+		*lastgasmix = *mix;
+	} else if (same_string(internalEvent->name, "modechange")) {
+		name += QString(": %1").arg(gettextFromC::tr(divemode_text_ui[internalEvent->value]));
+	} else if (value) {
+		if (type == SAMPLE_EVENT_PO2 && same_string(internalEvent->name, "SP change")) {
+			name += QString(": %1bar").arg((double)value / 1000, 0, 'f', 1);
+		} else if (type == SAMPLE_EVENT_CEILING && same_string(internalEvent->name, "planned waypoint above ceiling")) {
+			const char *depth_unit;
+			double depth_value = get_depth_units(value*1000, NULL, &depth_unit);
+			name += QString(": %1%2").arg((int) round(depth_value)).arg(depth_unit);
+		} else {
+			name += QString(": %1").arg(value);
+		}
+	} else if (type == SAMPLE_EVENT_PO2 && same_string(internalEvent->name, "SP change")) {
 		// this is a bad idea - we are abusing an existing event type that is supposed to
-		// warn of high or low pO₂ and are turning it into a set point change event
-		name += "\n" + tr("Manual switch to OC");
+		// warn of high or low pO₂ and are turning it into a setpoint change event
+		name += ":\n" + tr("Manual switch to OC");
 	} else {
 		name += internalEvent->flags & SAMPLE_FLAGS_BEGIN ? tr(" begin", "Starts with space!") :
 								    internalEvent->flags & SAMPLE_FLAGS_END ? tr(" end", "Starts with space!") : "";
 	}
-	// qDebug() << name;
 	setToolTip(name);
 }
 
-void DiveEventItem::eventVisibilityChanged(const QString &eventName, bool visible)
+void DiveEventItem::eventVisibilityChanged(const QString&, bool)
 {
 	//WARN: lookslike we should implement this.
-	Q_UNUSED(eventName);
-	Q_UNUSED(visible);
 }
 
 bool DiveEventItem::shouldBeHidden()

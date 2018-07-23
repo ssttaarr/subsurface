@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #ifndef USERMANUAL_H
 #define USERMANUAL_H
 
@@ -7,6 +8,7 @@
 #else
 #include <QWebView>
 #endif
+#include <QDialog>
 #include "ui_searchbar.h"
 
 class SearchBar : public QWidget{
@@ -46,7 +48,7 @@ public:
 #endif
 
 
-class UserManual : public QWidget {
+class UserManual : public QDialog {
 	Q_OBJECT
 
 public:

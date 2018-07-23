@@ -1,8 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "core/gpslocation.h"
 #include "qt-models/gpslistmodel.h"
 #include "core/pref.h"
-#include "core/dive.h"
-#include "core/helpers.h"
+#include "core/qthelper.h"
 #include <time.h>
 #include <unistd.h>
 #include <QDebug>
@@ -45,9 +45,22 @@ GpsLocation *GpsLocation::instance()
 	return m_Instance;
 }
 
+bool GpsLocation::hasInstance()
+{
+	return m_Instance != NULL;
+}
+
 GpsLocation::~GpsLocation()
 {
 	m_Instance = NULL;
+}
+
+void GpsLocation::setGpsTimeThreshold(int seconds)
+{
+	if (m_GpsSource) {
+		m_GpsSource->setUpdateInterval(seconds * 1000);
+		status(QString("Set GPS service update interval to %1 s").arg(m_GpsSource->updateInterval() / 1000));
+	}
 }
 
 QGeoPositionInfoSource *GpsLocation::getGpsSource()
@@ -80,7 +93,7 @@ QGeoPositionInfoSource *GpsLocation::getGpsSource()
 			connect(m_GpsSource, SIGNAL(positionUpdated(QGeoPositionInfo)), this, SLOT(newPosition(QGeoPositionInfo)));
 			connect(m_GpsSource, SIGNAL(updateTimeout()), this, SLOT(updateTimeout()));
 			connect(m_GpsSource, SIGNAL(error(QGeoPositionInfoSource::Error)), this, SLOT(positionSourceError(QGeoPositionInfoSource::Error)));
-			m_GpsSource->setUpdateInterval(5 * 60 * 1000); // 5 minutes so the device doesn't drain the battery
+			setGpsTimeThreshold(prefs.time_threshold);
 		} else {
 #ifdef SUBSURFACE_MOBILE
 			status("don't have GPS source");
@@ -117,14 +130,23 @@ void GpsLocation::serviceEnable(bool toggle)
 
 QString GpsLocation::currentPosition()
 {
+	qDebug() << "current position requested";
 	if (!hasLocationsSource())
-		return tr("Unknown GPS location");
-	if (m_trackers.count() && m_trackers.lastKey() + 300 >= QDateTime::currentMSecsSinceEpoch() / 1000) {
-		// we can simply use the last position that we tracked
-		gpsTracker gt = m_trackers.last();
-		QString gpsString = printGPSCoords(gt.latitude.udeg, gt.longitude.udeg);
-		qDebug() << "returning last position" << gpsString;
-		return gpsString;
+		return tr("Unknown GPS location (no GPS source)");
+	if (m_trackers.count()) {
+		QDateTime lastFixTime =	QDateTime().fromMSecsSinceEpoch((m_trackers.lastKey() - gettimezoneoffset(m_trackers.lastKey())) * 1000);
+		QDateTime now = QDateTime::currentDateTime();
+		int delta = lastFixTime.secsTo(now);
+		qDebug() << "lastFixTime" << lastFixTime.toString() << "now" << now.toString() << "delta" << delta;
+		if (delta < 300) {
+			// we can simply use the last position that we tracked
+			gpsTracker gt = m_trackers.last();
+			QString gpsString = printGPSCoords(gt.latitude.udeg, gt.longitude.udeg);
+			qDebug() << "returning last position" << gpsString;
+			return gpsString;
+		} else {
+			qDebug() << "last position saved was too old" << lastFixTime.toString();
+		}
 	}
 	qDebug() << "requesting new GPS position";
 	m_GpsSource->requestUpdate();
@@ -151,15 +173,18 @@ void GpsLocation::newPosition(QGeoPositionInfo pos)
 	int64_t delta = (int64_t)pos.timestamp().toTime_t() + gettimezoneoffset() - lastTime;
 	if (!nr || waitingForPosition || delta > prefs.time_threshold ||
 	    lastCoord.distanceTo(pos.coordinate()) > prefs.distance_threshold) {
-		QString msg("received new position %1 after delta %2 threshold %3");
-		status(qPrintable(msg.arg(pos.coordinate().toString()).arg(delta).arg(prefs.time_threshold)));
+		QString msg("received new position %1 after delta %2 threshold %3 (now %4 last %5)");
+		status(qPrintable(msg.arg(pos.coordinate().toString()).arg(delta).arg(prefs.time_threshold).arg(pos.timestamp().toString()).arg(QDateTime().fromMSecsSinceEpoch(lastTime * 1000).toString())));
 		waitingForPosition = false;
+		acquiredPosition();
 		gpsTracker gt;
 		gt.when = pos.timestamp().toTime_t();
 		gt.when += gettimezoneoffset(gt.when);
-		gt.latitude.udeg = rint(pos.coordinate().latitude() * 1000000);
-		gt.longitude.udeg = rint(pos.coordinate().longitude() * 1000000);
+		gt.latitude.udeg = lrint(pos.coordinate().latitude() * 1000000);
+		gt.longitude.udeg = lrint(pos.coordinate().longitude() * 1000000);
 		addFixToStorage(gt);
+		gpsTracker gtNew = m_trackers.last();
+		qDebug() << "newest fix is now at" << QDateTime().fromMSecsSinceEpoch(gtNew.when - gettimezoneoffset(gtNew.when) * 1000).toString();
 	}
 }
 
@@ -238,6 +263,13 @@ static void copy_gps_location(struct gpsTracker &gps, struct dive *d)
 }
 
 #define SAME_GROUP 6 * 3600 /* six hours */
+#define SET_LOCATION(_dive, _gpsfix, _mark)	\
+{						\
+	copy_gps_location(_gpsfix, _dive);	\
+	changed = true;				\
+	last = _mark;				\
+}
+
 bool GpsLocation::applyLocations()
 {
 	int i;
@@ -261,7 +293,7 @@ bool GpsLocation::applyLocations()
 					qDebug() << "processing gpsFix @" << get_dive_date_string(gpsTable[j].when) <<
 						    "which is withing six hours of dive from" <<
 						    get_dive_date_string(d->when) << "until" <<
-						    get_dive_date_string(d->when + d->duration.seconds);
+						    get_dive_date_string(dive_endtime(d));
 				/*
 				 * If position is fixed during dive. This is the good one.
 				 * Asign and mark position, and end gps_location loop
@@ -269,9 +301,7 @@ bool GpsLocation::applyLocations()
 				if (time_during_dive_with_offset(d, gpsTable[j].when, 0)) {
 					if (verbose)
 						qDebug() << "gpsFix is during the dive, pick that one";
-					copy_gps_location(gpsTable[j], d);
-					changed = true;
-					last = j;
+					SET_LOCATION(d, gpsTable[j], j);
 					break;
 				} else {
 					/*
@@ -280,15 +310,6 @@ bool GpsLocation::applyLocations()
 					if (j + 1 < cnt && time_during_dive_with_offset(d, gpsTable[j+1].when, SAME_GROUP)) {
 						if (verbose)
 							qDebug() << "look at the next gps fix @" << get_dive_date_string(gpsTable[j+1].when);
-						/* first let's test if this one is during the dive */
-						if (time_during_dive_with_offset(d, gpsTable[j+1].when, 0)) {
-							if (verbose)
-								qDebug() << "which is during the dive, pick that one";
-							copy_gps_location(gpsTable[j+1], d);
-							changed = true;
-							last = j + 1;
-							break;
-						}
 						/* we know the gps fixes are sorted; if they are both before the dive, ignore the first,
 						 * if theay are both after the dive, take the first,
 						 * if the first is before and the second is after, take the closer one */
@@ -296,28 +317,22 @@ bool GpsLocation::applyLocations()
 							if (verbose)
 								qDebug() << "which is closer to the start of the dive, do continue with that";
 							continue;
-						} else if (gpsTable[j].when > d->when + d->duration.seconds) {
+						} else if (gpsTable[j].when > dive_endtime(d)) {
 							if (verbose)
 								qDebug() << "which is even later after the end of the dive, so pick the previous one";
-							copy_gps_location(gpsTable[j], d);
-							changed = true;
-							last = j;
+							SET_LOCATION(d, gpsTable[j], j);
 							break;
 						} else {
 							/* ok, gpsFix is before, nextgpsFix is after */
-							if (d->when - gpsTable[j].when <= gpsTable[j+1].when - (d->when + d->duration.seconds)) {
+							if (d->when - gpsTable[j].when <= gpsTable[j+1].when - dive_endtime(d)) {
 								if (verbose)
 									qDebug() << "pick the one before as it's closer to the start";
-								copy_gps_location(gpsTable[j], d);
-								changed = true;
-								last = j;
+								SET_LOCATION(d, gpsTable[j], j);
 								break;
 							} else {
 								if (verbose)
 									qDebug() << "pick the one after as it's closer to the start";
-								copy_gps_location(gpsTable[j+1], d);
-								changed = true;
-								last = j + 1;
+								SET_LOCATION(d, gpsTable[j + 1], j + 1);
 								break;
 							}
 						}
@@ -327,9 +342,7 @@ bool GpsLocation::applyLocations()
 					} else {
 						if (verbose)
 							qDebug() << "which seems to be the best one for this dive, so pick it";
-						copy_gps_location(gpsTable[j], d);
-						changed = true;
-						last = j;
+						SET_LOCATION(d, gpsTable[j], j);
 						break;
 					}
 				}
@@ -337,7 +350,7 @@ bool GpsLocation::applyLocations()
 				/* If position is out of SAME_GROUP range and in the future, mark position for
 				 * next dive iteration and end the gps_location loop
 				 */
-				if (gpsTable[j].when >= d->when + d->duration.seconds + SAME_GROUP) {
+				if (gpsTable[j].when >= dive_endtime(d) + SAME_GROUP) {
 					last = j;
 					break;
 				}
@@ -434,33 +447,32 @@ void GpsLocation::deleteFixFromStorage(gpsTracker &gt)
 
 void GpsLocation::deleteGpsFix(qint64 when)
 {
-	struct gpsTracker defaultTracker;
-	defaultTracker.when = 0;
-	struct gpsTracker deletedTracker = m_trackers.value(when, defaultTracker);
-	if (deletedTracker.when != when) {
-		qDebug() << "can't find tracker for timestamp" << when;
+	auto it = m_trackers.find(when);
+	if (it == m_trackers.end()) {
+		qWarning() << "GpsLocation::deleteGpsFix(): can't find tracker for timestamp " << when;
 		return;
 	}
+	struct gpsTracker deletedTracker = *it;
 	deleteFixFromStorage(deletedTracker);
 	m_deletedTrackers.append(deletedTracker);
 }
 
+#ifdef SUBSURFACE_MOBILE
 void GpsLocation::clearGpsData()
 {
 	m_trackers.clear();
 	geoSettings->clear();
 	geoSettings->sync();
 }
+#endif
 
-void GpsLocation::postError(QNetworkReply::NetworkError error)
+void GpsLocation::postError(QNetworkReply::NetworkError)
 {
-	Q_UNUSED(error);
 	status(QString("error when sending a GPS fix: %1").arg(reply->errorString()));
 }
 
-void GpsLocation::getUseridError(QNetworkReply::NetworkError error)
+void GpsLocation::getUseridError(QNetworkReply::NetworkError)
 {
-	Q_UNUSED(error);
 	status(QString("error when retrieving Subsurface webservice user id: %1").arg(reply->errorString()));
 }
 
@@ -589,7 +601,7 @@ void GpsLocation::downloadFromServer()
 		timer.stop();
 		if (!reply->error()) {
 			QString response = reply->readAll();
-			QJsonDocument json = QJsonDocument::fromJson(response.toLocal8Bit());
+			QJsonDocument json = QJsonDocument::fromJson(response.toUtf8());
 			QJsonObject object = json.object();
 			if (object.value("download").toString() != "ok") {
 				qDebug() << "problems downloading GPS fixes";
@@ -600,7 +612,7 @@ void GpsLocation::downloadFromServer()
 			qDebug() << downloadedFixes.count() << "GPS fixes downloaded";
 			for (int i = 0; i < downloadedFixes.count(); i++) {
 				QJsonObject fix = downloadedFixes[i].toObject();
-				QDate date = QDate::fromString(fix.value("date").toString(), "yyy-M-d");
+				QDate date = QDate::fromString(fix.value("date").toString(), "yyyy-M-d");
 				QTime time = QTime::fromString(fix.value("time").toString(), "hh:m:s");
 				QString name = fix.value("name").toString();
 				QString latitude = fix.value("latitude").toString();
@@ -612,8 +624,8 @@ void GpsLocation::downloadFromServer()
 
 				struct gpsTracker gt;
 				gt.when = timestamp.toMSecsSinceEpoch() / 1000;
-				gt.latitude.udeg = latitude.toDouble() * 1000000;
-				gt.longitude.udeg = longitude.toDouble() * 1000000;
+				gt.latitude.udeg = lrint(latitude.toDouble() * 1000000);
+				gt.longitude.udeg = lrint(longitude.toDouble() * 1000000);
 				gt.name = name;
 				// add this GPS fix to the QMap and the settings (remove existing fix at the same timestamp first)
 				if (m_trackers.keys().contains(gt.when)) {

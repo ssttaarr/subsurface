@@ -1,16 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "divecomputer.h"
 #include "dive.h"
+#include "subsurface-string.h"
 #include "subsurface-qt/SettingsObjectWrapper.h"
 
 DiveComputerList dcList;
-
-DiveComputerList::DiveComputerList()
-{
-}
-
-DiveComputerList::~DiveComputerList()
-{
-}
 
 bool DiveComputerNode::operator==(const DiveComputerNode &a) const
 {
@@ -26,6 +20,11 @@ bool DiveComputerNode::operator!=(const DiveComputerNode &a) const
 	return !(*this == a);
 }
 
+bool DiveComputerNode::operator<(const DiveComputerNode &a) const
+{
+	return std::tie(model, deviceId) < std::tie(a.model, a.deviceId);
+}
+
 bool DiveComputerNode::changesValues(const DiveComputerNode &b) const
 {
 	if (model != b.model || deviceId != b.deviceId) {
@@ -39,57 +38,45 @@ bool DiveComputerNode::changesValues(const DiveComputerNode &b) const
 
 const DiveComputerNode *DiveComputerList::getExact(const QString &m, uint32_t d)
 {
-	for (QMap<QString, DiveComputerNode>::iterator it = dcMap.find(m); it != dcMap.end() && it.key() == m; ++it)
-		if (it->deviceId == d)
-			return &*it;
-	return NULL;
+	auto it = std::lower_bound(dcs.begin(), dcs.end(), DiveComputerNode { m, d , {}, {}, {} } );
+	return it != dcs.end() && it->model == m && it->deviceId == d ? &*it : NULL;
 }
 
 const DiveComputerNode *DiveComputerList::get(const QString &m)
 {
-	QMap<QString, DiveComputerNode>::iterator it = dcMap.find(m);
-	if (it != dcMap.end())
-		return &*it;
-	return NULL;
+	auto it = std::lower_bound(dcs.begin(), dcs.end(), DiveComputerNode { m, 0 , {}, {}, {} } );
+	return it != dcs.end() && it->model == m ? &*it : NULL;
 }
 
 void DiveComputerNode::showchanges(const QString &n, const QString &s, const QString &f) const
 {
-	if (nickName != n)
-		qDebug("new nickname %s for DC model %s deviceId 0x%x", n.toUtf8().data(), model.toUtf8().data(), deviceId);
-	if (serialNumber != s)
-		qDebug("new serial number %s for DC model %s deviceId 0x%x", s.toUtf8().data(), model.toUtf8().data(), deviceId);
-	if (firmware != f)
-		qDebug("new firmware version %s for DC model %s deviceId 0x%x", f.toUtf8().data(), model.toUtf8().data(), deviceId);
+	if (nickName != n && !n.isEmpty())
+		qDebug("new nickname %s for DC model %s deviceId 0x%x", qPrintable(n), qPrintable(model), deviceId);
+	if (serialNumber != s && !s.isEmpty())
+		qDebug("new serial number %s for DC model %s deviceId 0x%x", qPrintable(s), qPrintable(model), deviceId);
+	if (firmware != f && !f.isEmpty())
+		qDebug("new firmware version %s for DC model %s deviceId 0x%x", qPrintable(f), qPrintable(model), deviceId);
 }
 
 void DiveComputerList::addDC(QString m, uint32_t d, QString n, QString s, QString f)
 {
 	if (m.isEmpty() || d == 0)
 		return;
-	const DiveComputerNode *existNode = this->getExact(m, d);
-
-	if (existNode) {
-		// Update any non-existent fields from the old entry
-		if (n.isEmpty())
-			n = existNode->nickName;
-		if (s.isEmpty())
-			s = existNode->serialNumber;
-		if (f.isEmpty())
-			f = existNode->firmware;
-
-		// Do all the old values match?
-		if (n == existNode->nickName && s == existNode->serialNumber && f == existNode->firmware)
-			return;
-
+	auto it = std::lower_bound(dcs.begin(), dcs.end(), DiveComputerNode { m, d , {}, {}, {} } );
+	if (it != dcs.end() && it->model == m && it->deviceId == d) {
 		// debugging: show changes
 		if (verbose)
-			existNode->showchanges(n, s, f);
-		dcMap.remove(m, *existNode);
+			it->showchanges(n, s, f);
+		// Update any non-existent fields from the old entry
+		if (!n.isEmpty())
+			it->nickName = n;
+		if (!s.isEmpty())
+			it->serialNumber = s;
+		if (!f.isEmpty())
+			it->firmware = f;
+	} else {
+		dcs.insert(it, DiveComputerNode { m, d, s, f, n });
 	}
-
-	DiveComputerNode newNode(m, d, s, f, n);
-	dcMap.insert(m, newNode);
 }
 
 extern "C" void create_device_node(const char *model, uint32_t deviceid, const char *serial, const char *firmware, const char *nickname)
@@ -97,7 +84,7 @@ extern "C" void create_device_node(const char *model, uint32_t deviceid, const c
 	dcList.addDC(model, deviceid, nickname, serial, firmware);
 }
 
-extern "C" bool compareDC(const DiveComputerNode &a, const DiveComputerNode &b)
+static bool compareDCById(const DiveComputerNode &a, const DiveComputerNode &b)
 {
 	return a.deviceId < b.deviceId;
 }
@@ -106,10 +93,9 @@ extern "C" void call_for_each_dc (void *f, void (*callback)(void *, const char *
 							   const char *, const char *, const char *),
 				  bool select_only)
 {
-	QList<DiveComputerNode> values = dcList.dcMap.values();
-	qSort(values.begin(), values.end(), compareDC);
-	for (int i = 0; i < values.size(); i++) {
-		const DiveComputerNode *node = &values.at(i);
+	QVector<DiveComputerNode> values = dcList.dcs;
+	std::sort(values.begin(), values.end(), compareDCById);
+	for (const DiveComputerNode &node: values) {
 		bool found = false;
 		if (select_only) {
 			int j;
@@ -119,7 +105,7 @@ extern "C" void call_for_each_dc (void *f, void (*callback)(void *, const char *
 				if (!d->selected)
 					continue;
 				for_each_dc(d, dc) {
-					if (dc->deviceid == node->deviceId) {
+					if (dc->deviceid == node.deviceId) {
 						found = true;
 						break;
 					}
@@ -131,11 +117,10 @@ extern "C" void call_for_each_dc (void *f, void (*callback)(void *, const char *
 			found = true;
 		}
 		if (found)
-			callback(f, node->model.toUtf8().data(), node->deviceId, node->nickName.toUtf8().data(),
-				 node->serialNumber.toUtf8().data(), node->firmware.toUtf8().data());
+			callback(f, qPrintable(node.model), node.deviceId, qPrintable(node.nickName),
+				 qPrintable(node.serialNumber), qPrintable(node.firmware));
 	}
 }
-
 
 extern "C" int is_default_dive_computer(const char *vendor, const char *product)
 {
@@ -157,7 +142,7 @@ extern "C" void set_dc_nickname(struct dive *dive)
 	struct divecomputer *dc;
 
 	for_each_dc (dive, dc) {
-		if (dc->model && *dc->model && dc->deviceid &&
+		if (!empty_string(dc->model) && dc->deviceid &&
 		    !dcList.getExact(dc->model, dc->deviceid)) {
 			// we don't have this one, yet
 			const DiveComputerNode *existNode = dcList.get(dc->model);

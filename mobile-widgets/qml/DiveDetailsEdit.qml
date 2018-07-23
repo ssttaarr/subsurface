@@ -1,24 +1,29 @@
-import QtQuick 2.3
-import QtQuick.Controls 1.2
-import QtQuick.Controls.Styles 1.2
+// SPDX-License-Identifier: GPL-2.0
+import QtQuick 2.6
+import QtQuick.Controls 2.2 as Controls
 import QtQuick.Dialogs 1.2
-import QtQuick.Layouts 1.1
+import QtQuick.Layouts 1.2
 import org.subsurfacedivelog.mobile 1.0
-import org.kde.kirigami 1.0 as Kirigami
+import org.kde.kirigami 2.2 as Kirigami
 
 Item {
 	id: detailsEdit
 	property int dive_id
 	property int number
 	property alias dateText: txtDate.text
-	property alias locationText: txtLocation.text
+	property alias locationText: locationBox.editText
+	property alias locationIndex: locationBox.currentIndex
 	property alias gpsText: txtGps.text
 	property alias airtempText: txtAirTemp.text
 	property alias watertempText: txtWaterTemp.text
 	property alias suitIndex: suitBox.currentIndex
+	property alias suitText: suitBox.editText
 	property alias buddyIndex: buddyBox.currentIndex
+	property alias buddyText: buddyBox.editText
 	property alias divemasterIndex: divemasterBox.currentIndex
+	property alias divemasterText: divemasterBox.editText
 	property alias cylinderIndex: cylinderBox.currentIndex
+	property alias cylinderText: cylinderBox.editText
 	property alias notesText: txtNotes.text
 	property alias durationText: txtDuration.text
 	property alias depthText: txtDepth.text
@@ -31,13 +36,42 @@ Item {
 	property alias divemasterModel: divemasterBox.model
 	property alias buddyModel: buddyBox.model
 	property alias cylinderModel: cylinderBox.model
+	property alias locationModel: locationBox.model
+	property int rating
+	property int visibility
+
+	function clearDetailsEdit() {
+		detailsEdit.dive_id = 0
+		detailsEdit.number = 0
+		detailsEdit.dateText = ""
+		detailsEdit.locationText = ""
+		detailsEdit.durationText = ""
+		detailsEdit.depthText = ""
+		detailsEdit.airtempText = ""
+		detailsEdit.watertempText = ""
+		detailsEdit.divemasterText = ""
+		detailsEdit.buddyText = ""
+		suitBox.currentIndex = -1
+		buddyBox.currentIndex = -1
+		divemasterBox.currentIndex = -1
+		cylinderBox.currentIndex = -1
+		detailsEdit.notesText = ""
+		detailsEdit.rating = 0
+		detailsEdit.visibility = 0
+	}
 
 	function saveData() {
+		diveDetailsPage.state = "view" // run the transition
 		// apply the changes to the dive_table
-		manager.commitChanges(dive_id, detailsEdit.dateText, detailsEdit.locationText, detailsEdit.gpsText, detailsEdit.durationText,
-				      detailsEdit.depthText, detailsEdit.airtempText, detailsEdit.watertempText, suitBox.editText, buddyBox.editText,
-				      divemasterBox.editText, detailsEdit.weightText, detailsEdit.notesText, detailsEdit.startpressureText,
-				      detailsEdit.endpressureText, detailsEdit.gasmixText, cylinderBox.editText)
+		manager.commitChanges(dive_id, detailsEdit.dateText, locationBox.editText, detailsEdit.gpsText, detailsEdit.durationText,
+				      detailsEdit.depthText, detailsEdit.airtempText, detailsEdit.watertempText,
+				      suitBox.currentText != "" ? suitBox.currentText : suitBox.editText, buddyBox.editText,
+				      divemasterBox.currentText != "" ? divemasterBox.currentText : divemasterBox.editText,
+				      detailsEdit.weightText, detailsEdit.notesText, detailsEdit.startpressureText,
+				      detailsEdit.endpressureText, detailsEdit.gasmixText,
+				      cylinderBox.currentText != "" ? cylinderBox.currentText : cylinderBox.editText,
+				      detailsEdit.rating,
+				      detailsEdit.visibility)
 		// trigger the profile to be redrawn
 		QMLProfile.diveId = dive_id
 
@@ -47,7 +81,7 @@ Item {
 		var newIdx = diveModel.getIdxForId(dive_id)
 		diveDetailsListView.currentIndex = newIdx
 		diveDetailsListView.currentItem.modelData.date = detailsEdit.dateText
-		diveDetailsListView.currentItem.modelData.location = detailsEdit.locationText
+		diveDetailsListView.currentItem.modelData.location = locationBox.currentText
 		diveDetailsListView.currentItem.modelData.duration = detailsEdit.durationText
 		diveDetailsListView.currentItem.modelData.depth = detailsEdit.depthText
 		diveDetailsListView.currentItem.modelData.airtemp = detailsEdit.airtempText
@@ -57,18 +91,20 @@ Item {
 		diveDetailsListView.currentItem.modelData.divemaster = divemasterBox.currentText
 		diveDetailsListView.currentItem.modelData.cylinder = cylinderBox.currentText
 		diveDetailsListView.currentItem.modelData.notes = detailsEdit.notesText
-		diveDetailsPage.state = "view"
+		diveDetailsListView.currentItem.modelData.rating = detailsEdit.rating
+		diveDetailsListView.currentItem.modelData.visibility = detailsEdit.visibility
 		Qt.inputMethod.hide()
 		// now make sure we directly show the saved dive (this may be a new dive, or it may have moved)
 		showDiveIndex(newIdx)
+		clearDetailsEdit()
 	}
 
 	height: editArea.height
-	width: diveDetailsPage.width - diveDetailsPage.leftPadding - diveDetailsPage.rightPadding
+	width: diveDetailsPage.width - diveDetailsPage.leftPadding - diveDetailsPage.rightPadding - Kirigami.Units.smallSpacing * 2
 	ColumnLayout {
 		id: editArea
 		spacing: Kirigami.Units.smallSpacing
-		width: parent.width - 2 * Kirigami.Units.gridUnit
+		width: parent.width
 
 		GridLayout {
 			id: editorDetails
@@ -79,38 +115,61 @@ Item {
 				Layout.columnSpan: 2
 				text: qsTr("Dive %1").arg(number)
 			}
-			Kirigami.Label {
+			Controls.Label {
 				Layout.alignment: Qt.AlignRight
 				text: qsTr("Date:")
+				font.pointSize: subsurfaceTheme.smallPointSize
 			}
-			StyledTextField {
+			Controls.TextField {
 				id: txtDate;
 				Layout.fillWidth: true
+				onEditingFinished: {
+					focus = false
+				}
 			}
-			Kirigami.Label {
+			Controls.Label {
 				Layout.alignment: Qt.AlignRight
 				text: qsTr("Location:")
+				font.pointSize: subsurfaceTheme.smallPointSize
 			}
-			StyledTextField {
-				id: txtLocation;
+			Controls.ComboBox {
+				id: locationBox
+				editable: true
+				flat: true
+				model: diveDetailsListView.currentItem && diveDetailsListView.currentItem.modelData !== null ?
+					manager.locationList : null
+				inputMethodHints: Qt.ImhNoPredictiveText
 				Layout.fillWidth: true
+				onAccepted: {
+					focus = false
+					gpsText = manager.getGpsFromSiteName(editText)
+				}
+				onActivated: {
+					focus = false
+					gpsText = manager.getGpsFromSiteName(editText)
+				}
 			}
 
-			Kirigami.Label {
+			Controls.Label {
 				Layout.alignment: Qt.AlignRight
 				text: qsTr("Coordinates:")
+				font.pointSize: subsurfaceTheme.smallPointSize
 			}
-			StyledTextField {
+			Controls.TextField {
 				id: txtGps
 				Layout.fillWidth: true
+				onEditingFinished: {
+					focus = false
+				}
 			}
 
-			Kirigami.Label {
+			Controls.Label {
 				Layout.alignment: Qt.AlignRight
 				text: qsTr("Use current\nGPS location:")
 				visible: manager.locationServiceAvailable
+				font.pointSize: subsurfaceTheme.smallPointSize
 			}
-			CheckBox {
+			SsrfCheckBox {
 				id: checkboxGPS
 				visible: manager.locationServiceAvailable
 				onCheckedChanged: {
@@ -118,148 +177,228 @@ Item {
 						gpsText = manager.getCurrentPosition()
 				}
 			}
+			Connections {
+				target: manager
+				onWaitingForPositionChanged: {
+					gpsText = manager.getCurrentPosition()
+				}
+			}
 
-			Kirigami.Label {
+			Controls.Label {
 				Layout.alignment: Qt.AlignRight
 				text: qsTr("Depth:")
+				font.pointSize: subsurfaceTheme.smallPointSize
 			}
-			StyledTextField {
+			Controls.TextField {
 				id: txtDepth
 				Layout.fillWidth: true
 				validator: RegExpValidator { regExp: /[^-]*/ }
+				onEditingFinished: {
+					focus = false
+				}
 			}
-			Kirigami.Label {
+			Controls.Label {
 				Layout.alignment: Qt.AlignRight
 				text: qsTr("Duration:")
+				font.pointSize: subsurfaceTheme.smallPointSize
 			}
-			StyledTextField {
+			Controls.TextField {
 				id: txtDuration
 				Layout.fillWidth: true
 				validator: RegExpValidator { regExp: /[^-]*/ }
+				onEditingFinished: {
+					focus = false
+				}
 			}
 
-			Kirigami.Label {
+			Controls.Label {
 				Layout.alignment: Qt.AlignRight
 				text: qsTr("Air Temp:")
+				font.pointSize: subsurfaceTheme.smallPointSize
 			}
-			StyledTextField {
+			Controls.TextField {
 				id: txtAirTemp
 				Layout.fillWidth: true
+				onEditingFinished: {
+					focus = false
+				}
 			}
 
-			Kirigami.Label {
+			Controls.Label {
 				Layout.alignment: Qt.AlignRight
 				text: qsTr("Water Temp:")
+				font.pointSize: subsurfaceTheme.smallPointSize
 			}
-			StyledTextField {
+			Controls.TextField {
 				id: txtWaterTemp
 				Layout.fillWidth: true
+				onEditingFinished: {
+					focus = false
+				}
 			}
 
-			Kirigami.Label {
+			Controls.Label {
 				Layout.alignment: Qt.AlignRight
 				text: qsTr("Suit:")
+				font.pointSize: subsurfaceTheme.smallPointSize
 			}
-			ComboBox {
+			Controls.ComboBox {
 				id: suitBox
 				editable: true
-				model: diveDetailsListView.currentItem.modelData.dive.suitList
+				flat: true
+				model: diveDetailsListView.currentItem && diveDetailsListView.currentItem.modelData !== null ?
+					manager.suitList : null
 				inputMethodHints: Qt.ImhNoPredictiveText
 				Layout.fillWidth: true
-				style: ComboBoxStyle {
-					dropDownButtonWidth: 0
+				onActivated: {
+					focus = false
+				}
+				onAccepted: {
+					focus = false
 				}
 			}
 
-			Kirigami.Label {
+			Controls.Label {
 				Layout.alignment: Qt.AlignRight
 				text: qsTr("Buddy:")
+				font.pointSize: subsurfaceTheme.smallPointSize
 			}
-			ComboBox {
+			Controls.ComboBox {
 				id: buddyBox
 				editable: true
-				model: diveDetailsListView.currentItem.modelData.dive.buddyList
+				model: diveDetailsListView.currentItem && diveDetailsListView.currentItem.modelData !== null ?
+					manager.buddyList : null
 				inputMethodHints: Qt.ImhNoPredictiveText
 				Layout.fillWidth: true
-				style: ComboBoxStyle {
-					dropDownButtonWidth: 0
+				onActivated: {
+					focus = false
+				}
+				onAccepted: {
+					focus = false
 				}
 			}
 
-			Kirigami.Label {
+			Controls.Label {
 				Layout.alignment: Qt.AlignRight
-				text: qsTr("Dive Master:")
+				text: qsTr("Divemaster:")
+				font.pointSize: subsurfaceTheme.smallPointSize
 			}
-			ComboBox {
+			Controls.ComboBox {
 				id: divemasterBox
 				editable: true
-				model: diveDetailsListView.currentItem.modelData.dive.divemasterList
+				model: diveDetailsListView.currentItem && diveDetailsListView.currentItem.modelData !== null ?
+					manager.divemasterList : null
 				inputMethodHints: Qt.ImhNoPredictiveText
 				Layout.fillWidth: true
-				style: ComboBoxStyle {
-					dropDownButtonWidth: 0
+				onActivated: {
+					focus = false
+				}
+				onAccepted: {
+					focus = false
 				}
 			}
 
-			Kirigami.Label {
+			Controls.Label {
 				Layout.alignment: Qt.AlignRight
 				text: qsTr("Weight:")
+				font.pointSize: subsurfaceTheme.smallPointSize
 			}
-			StyledTextField {
+			Controls.TextField {
 				id: txtWeight
-				fixed: text === "cannot edit multiple weight systems"
+				readOnly: text === "cannot edit multiple weight systems"
 				Layout.fillWidth: true
-			}
-
-			Kirigami.Label {
-				Layout.alignment: Qt.AlignRight
-				text: qsTr("Cylinder:")
-			}
-			ComboBox {
-				id: cylinderBox
-				editable: true
-				model: diveDetailsListView.currentItem.modelData.dive.cylinderList
-				inputMethodHints: Qt.ImhNoPredictiveText
-				Layout.fillWidth: true
-				style: ComboBoxStyle {
-					dropDownButtonWidth: 0
+				onEditingFinished: {
+					focus = false
 				}
 			}
 
-			Kirigami.Label {
+			Controls.Label {
+				Layout.alignment: Qt.AlignRight
+				text: qsTr("Cylinder:")
+				font.pointSize: subsurfaceTheme.smallPointSize
+			}
+			Controls.ComboBox {
+				id: cylinderBox
+				flat: true
+				model: diveDetailsListView.currentItem && diveDetailsListView.currentItem.modelData !== null ?
+					diveDetailsListView.currentItem.modelData.dive.cylinderList : null
+				inputMethodHints: Qt.ImhNoPredictiveText
+				Layout.fillWidth: true
+			}
+
+			Controls.Label {
 				Layout.alignment: Qt.AlignRight
 				text: qsTr("Gas mix:")
+				font.pointSize: subsurfaceTheme.smallPointSize
 			}
-			StyledTextField {
+			Controls.TextField {
 				id: txtGasMix
 				Layout.fillWidth: true
 				validator: RegExpValidator { regExp: /(EAN100|EAN\d\d|AIR|100|\d{1,2}|\d{1,2}\/\d{1,2})/i }
+				onEditingFinished: {
+					focus = false
+				}
 			}
 
-			Kirigami.Label {
+			Controls.Label {
 				Layout.alignment: Qt.AlignRight
 				text: qsTr("Start Pressure:")
+				font.pointSize: subsurfaceTheme.smallPointSize
 			}
-			StyledTextField {
+			Controls.TextField {
 				id: txtStartPressure
 				Layout.fillWidth: true
+				onEditingFinished: {
+					focus = false
+				}
 			}
 
-			Kirigami.Label {
+			Controls.Label {
 				Layout.alignment: Qt.AlignRight
 				text: qsTr("End Pressure:")
+				font.pointSize: subsurfaceTheme.smallPointSize
 			}
-			StyledTextField {
+			Controls.TextField {
 				id: txtEndPressure
 				Layout.fillWidth: true
+				onEditingFinished: {
+					focus = false
+				}
 			}
 
-			Kirigami.Label {
+			Controls.Label {
+				Layout.alignment: Qt.AlignRight
+				text: qsTr("Rating:")
+				font.pointSize: subsurfaceTheme.smallPointSize
+			}
+			Controls.SpinBox {
+				id: ratingPicker
+				from: 0
+				to: 5
+				value: rating
+				onValueChanged: rating = value
+			}
+
+			Controls.Label {
+				Layout.alignment: Qt.AlignRight
+				text: qsTr("Visibility:")
+				font.pointSize: subsurfaceTheme.smallPointSize
+			}
+			Controls.SpinBox {
+				id: visibilityPicker
+				from: 0
+				to: 5
+				value: visibility
+				onValueChanged: visibility = value
+			}
+
+			Controls.Label {
 				Layout.columnSpan: 2
 				Layout.alignment: Qt.AlignLeft
 				text: qsTr("Notes:")
+				font.pointSize: subsurfaceTheme.smallPointSize
 			}
-			TextArea {
+			Controls.TextArea {
 				Layout.columnSpan: 2
 				width: parent.width
 				id: txtNotes

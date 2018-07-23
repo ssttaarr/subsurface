@@ -3,6 +3,7 @@
   <xsl:include href="commonTemplates.xsl"/>
   <xsl:strip-space elements="*"/>
   <xsl:output method="xml" encoding="utf-8" indent="yes"/>
+  <xsl:param name="units" select="units"/>
 
   <xsl:key name="gases" match="cylinder" use="concat(substring-before(@o2, '.'), '/', substring-before(@he, '.'))" />
   <xsl:key name="images" match="picture" use="concat(../../dive/@number|../dive/@number, ':', @filename, '@', @offset)" />
@@ -111,9 +112,9 @@
                   </lastname>
                 </xsl:when>
                 <xsl:otherwise>
-                  <first_name>
+                  <firstname>
                     <xsl:value-of select="."/>
-                  </first_name>
+                  </firstname>
                 </xsl:otherwise>
               </xsl:choose>
             </personal>
@@ -167,10 +168,10 @@
               <xsl:value-of select="concat($o2, '/', $he)"/>
             </name>
             <o2>
-              <xsl:value-of select="$o2"/>
+              <xsl:value-of select="format-number($o2 div 100, '0.00')"/>
             </o2>
             <he>
-              <xsl:value-of select="$he"/>
+              <xsl:value-of select="format-number($he div 100, '0.00')"/>
             </he>
           </mix>
         </xsl:for-each>
@@ -179,12 +180,33 @@
       <profiledata>
 
         <xsl:for-each select="trip">
-          <repetitiongroup id="{generate-id(.)}">
+          <repetitiongroup>
+            <xsl:attribute name="id">
+              <xsl:choose>
+                <xsl:when test="$test != ''">
+                  <xsl:value-of select="generate-id(.)" />
+                </xsl:when>
+                <xsl:otherwise>
+                  <xsl:value-of select="'testid1'" />
+                </xsl:otherwise>
+              </xsl:choose>
+            </xsl:attribute>
+
             <xsl:apply-templates select="dive"/>
           </repetitiongroup>
         </xsl:for-each>
         <xsl:for-each select="dive">
-          <repetitiongroup id="{generate-id(.)}">
+          <repetitiongroup>
+            <xsl:attribute name="id">
+              <xsl:choose>
+                <xsl:when test="string-length($units) = 0 or $units = 0">
+                  <xsl:value-of select="generate-id(.)" />
+                </xsl:when>
+                <xsl:otherwise>
+                  <xsl:value-of select="'testid2'" />
+                </xsl:otherwise>
+              </xsl:choose>
+            </xsl:attribute>
             <xsl:apply-templates select="."/>
           </repetitiongroup>
         </xsl:for-each>
@@ -246,7 +268,18 @@
   </xsl:template>
 
   <xsl:template match="dive">
-    <dive id="{generate-id(.)}" xmlns="http://www.streit.cc/uddf/3.2/">
+    <dive xmlns="http://www.streit.cc/uddf/3.2/">
+      <xsl:attribute name="id">
+        <xsl:choose>
+          <xsl:when test="string-length($units) = 0 or $units = 0">
+            <xsl:value-of select="generate-id(.)" />
+          </xsl:when>
+          <xsl:otherwise>
+            <xsl:value-of select="'testid3'" />
+          </xsl:otherwise>
+        </xsl:choose>
+      </xsl:attribute>
+
 
       <informationbeforedive>
         <xsl:variable name="buddylist">
@@ -327,11 +360,11 @@
                 <xsl:value-of select="substring-before(@start, ' ') * 100000"/>
               </tankpressurebegin>
             </xsl:when>
-            <xsl:otherwise>
+            <xsl:when test="../divecomputer[1]/sample[@pressure]/@pressure[1]">
               <tankpressurebegin>
                 <xsl:value-of select="substring-before(../divecomputer[1]/sample[@pressure]/@pressure[1], ' ') * 100000"/>
               </tankpressurebegin>
-            </xsl:otherwise>
+            </xsl:when>
           </xsl:choose>
 
           <xsl:choose>
@@ -340,11 +373,11 @@
                 <xsl:value-of select="substring-before(@end, ' ') * 100000"/>
               </tankpressureend>
             </xsl:when>
-            <xsl:otherwise>
+            <xsl:when test="../divecomputer[1]/sample[@pressure][last()]/@pressure[1]">
               <tankpressureend>
                 <xsl:value-of select="substring-before(../divecomputer[1]/sample[@pressure][last()]/@pressure[1], ' ') * 100000"/>
               </tankpressureend>
-            </xsl:otherwise>
+            </xsl:when>
           </xsl:choose>
 
         </tankdata>
@@ -505,7 +538,7 @@
                 </xsl:for-each>
 
                 <depth>
-                  <xsl:value-of select="substring-before(./@depth, ' ')"/>
+                  <xsl:value-of select="round(substring-before(./@depth, ' ') * 100) div 100"/>
                 </depth>
 
                 <divetime>

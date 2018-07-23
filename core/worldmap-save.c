@@ -1,12 +1,14 @@
+// SPDX-License-Identifier: GPL-2.0
+#ifdef __clang__
 // Clang has a bug on zero-initialization of C structs.
 #pragma clang diagnostic ignored "-Wmissing-field-initializers"
+#endif
 
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 
-#include "dive.h"
 #include "membuffer.h"
 #include "save-html.h"
 #include "worldmap-save.h"
@@ -16,7 +18,7 @@
 char *getGoogleApi()
 {
 	/* google maps api auth*/
-	return "https://maps.googleapis.com/maps/api/js?key=AIzaSyDzo9PWsqYDDSddVswg_13rpD9oH_dLuoQ";
+	return "https://maps.googleapis.com/maps/api/js?";
 }
 
 void writeMarkers(struct membuffer *b, const bool selected_only)

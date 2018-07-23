@@ -1,5 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0
+#include "ssrf.h"
 #include <string.h>
 #include "dive.h"
+#include "subsurface-string.h"
 #include "device.h"
 
 /*
@@ -64,10 +67,10 @@
 static int fill_samples(struct sample *s, int max_d, int avg_d, int max_t, double slope, double d_frac)
 {
 	double t_frac = max_t * (1 - avg_d / (double)max_d);
-	int t1 = max_d / slope;
-	int t4 = max_t - t1 * d_frac;
-	int t3 = t4 - (t_frac - t1) / (1 - d_frac);
-	int t2 = t3 - t1 * (1 - d_frac);
+	int t1 = lrint(max_d / slope);
+	int t4 = lrint(max_t - t1 * d_frac);
+	int t3 = lrint(t4 - (t_frac - t1) / (1 - d_frac));
+	int t2 = lrint(t3 - t1 * (1 - d_frac));
 
 	if (t1 < 0 || t1 > t2 || t2 > t3 || t3 > t4 || t4 > max_t)
 		return 0;
@@ -77,9 +80,9 @@ static int fill_samples(struct sample *s, int max_d, int avg_d, int max_t, doubl
 	s[2].time.seconds = t2;
 	s[2].depth.mm = max_d;
 	s[3].time.seconds = t3;
-	s[3].depth.mm = max_d * d_frac;
+	s[3].depth.mm = lrint(max_d * d_frac);
 	s[4].time.seconds = t4;
-	s[4].depth.mm = max_d * d_frac;
+	s[4].depth.mm = lrint(max_d * d_frac);
 
 	return 1;
 }
@@ -92,44 +95,48 @@ static void fill_samples_no_avg(struct sample *s, int max_d, int max_t, double s
 {
 	// shallow or short dives are just trapecoids based on the given slope
 	if (max_d < 10000 || max_t < 600) {
-		s[1].time.seconds = max_d / slope;
+		s[1].time.seconds = lrint(max_d / slope);
 		s[1].depth.mm = max_d;
-		s[2].time.seconds = max_t - max_d / slope;
+		s[2].time.seconds = max_t - lrint(max_d / slope);
 		s[2].depth.mm = max_d;
 	} else {
-		s[1].time.seconds = max_d / slope;
+		s[1].time.seconds = lrint(max_d / slope);
 		s[1].depth.mm = max_d;
-		s[2].time.seconds = max_t - max_d / slope - 180;
+		s[2].time.seconds = max_t - lrint(max_d / slope) - 180;
 		s[2].depth.mm = max_d;
-		s[3].time.seconds = max_t - 5000 / slope - 180;
+		s[3].time.seconds = max_t - lrint(5000 / slope) - 180;
 		s[3].depth.mm = 5000;
-		s[4].time.seconds = max_t - 5000 / slope;
+		s[4].time.seconds = max_t - lrint(5000 / slope);
 		s[4].depth.mm = 5000;
 	}
 }
 
-struct divecomputer *fake_dc(struct divecomputer *dc, bool alloc)
+void fake_dc(struct divecomputer *dc)
 {
-	static struct sample fake_samples[6];
-	static struct divecomputer fakedc;
-	struct sample *fake = fake_samples;
+	alloc_samples(dc, 6);
+	struct sample *fake = dc->sample;
+	int i;
 
-	fakedc = (*dc);
-	if (alloc)
-		fake = malloc(sizeof(fake_samples));
-
-	fakedc.sample = fake;
-	fakedc.samples = 6;
+	dc->samples = 6;
 
 	/* The dive has no samples, so create a few fake ones */
 	int max_t = dc->duration.seconds;
 	int max_d = dc->maxdepth.mm;
 	int avg_d = dc->meandepth.mm;
 
-	memset(fake, 0, sizeof(fake_samples));
+	memset(fake, 0, 6 * sizeof(struct sample));
 	fake[5].time.seconds = max_t;
-	if (!max_t || !max_d)
-		return &fakedc;
+	for (i = 0; i < 6; i++) {
+		fake[i].bearing.degrees = -1;
+		fake[i].ndl.seconds = -1;
+	}
+	if (!max_t || !max_d) {
+		dc->samples = 0;
+		return;
+	}
+
+	/* Set last manually entered time to the total dive length */
+	dc->last_manual_time = dc->duration;
 
 	/*
 	 * We want to fake the profile so that the average
@@ -141,12 +148,12 @@ struct divecomputer *fake_dc(struct divecomputer *dc, bool alloc)
 	if (avg_d == 0) {
 		/* we try for a sane slope, but bow to the insanity of
 		 * the user supplied data */
-		fill_samples_no_avg(fake, max_d, max_t, MAX(2.0 * max_d / max_t, 5000.0 / 60));
+		fill_samples_no_avg(fake, max_d, max_t, MAX(2.0 * max_d / max_t, (double)prefs.ascratelast6m));
 		if (fake[3].time.seconds == 0) { // just a 4 point profile
-			fakedc.samples = 4;
+			dc->samples = 4;
 			fake[3].time.seconds = max_t;
 		}
-		return &fakedc;
+		return;
 	}
 	if (avg_d < max_d / 10 || avg_d >= max_d) {
 		avg_d = (max_d + 10000) / 3;
@@ -160,8 +167,8 @@ struct divecomputer *fake_dc(struct divecomputer *dc, bool alloc)
 	 * Ok, first we try a basic profile with a specific ascent
 	 * rate (5 meters per minute) and d_frac (1/3).
 	 */
-	if (fill_samples(fake, max_d, avg_d, max_t, 5000.0 / 60, 0.33))
-		return &fakedc;
+	if (fill_samples(fake, max_d, avg_d, max_t, (double)prefs.ascratelast6m, 0.33))
+		return;
 
 	/*
 	 * Ok, assume that didn't work because we cannot make the
@@ -169,7 +176,7 @@ struct divecomputer *fake_dc(struct divecomputer *dc, bool alloc)
 	 * followed by a much shallower region
 	 */
 	if (fill_samples(fake, max_d, avg_d, max_t, 10000.0 / 60, 0.10))
-		return &fakedc;
+		return;
 
 	/*
 	 * Uhhuh. That didn't work. We'd need to find a good combination that
@@ -177,17 +184,16 @@ struct divecomputer *fake_dc(struct divecomputer *dc, bool alloc)
 	 * slopes.
 	 */
 	if (fill_samples(fake, max_d, avg_d, max_t, 10000.0, 0.01))
-		return &fakedc;
+		return;
 
 	/* Even that didn't work? Give up, there's something wrong */
-	return &fakedc;
 }
 
 static void match_id(void *_dc, const char *model, uint32_t deviceid,
 		     const char *nickname, const char *serial, const char *firmware)
 {
 	// here nickname is unused
-	(void)nickname;
+	UNUSED(nickname);
 
 	struct divecomputer *dc = _dc;
 

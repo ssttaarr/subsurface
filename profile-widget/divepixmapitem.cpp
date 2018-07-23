@@ -1,7 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "profile-widget/divepixmapitem.h"
 #include "profile-widget/animationfunctions.h"
 #include "qt-models/divepicturemodel.h"
 #include "core/pref.h"
+#include "core/qthelper.h"
 #ifndef SUBSURFACE_MOBILE
 #include "desktop-widgets/preferences/preferencesdialog.h"
 #endif
@@ -9,43 +11,38 @@
 #include <QDesktopServices>
 #include <QGraphicsView>
 #include <QUrl>
+#include <QGraphicsSceneMouseEvent>
 
-DivePixmapItem::DivePixmapItem(QObject *parent) : QObject(parent), QGraphicsPixmapItem()
+DivePixmapItem::DivePixmapItem(QGraphicsItem *parent) : QGraphicsPixmapItem(parent)
 {
 }
 
-DiveButtonItem::DiveButtonItem(QObject *parent): DivePixmapItem(parent)
+CloseButtonItem::CloseButtonItem(QGraphicsItem *parent): DivePixmapItem(parent)
 {
-}
-
-void DiveButtonItem::mousePressEvent(QGraphicsSceneMouseEvent *event)
-{
-	QGraphicsItem::mousePressEvent(event);
-	emit clicked();
-}
-
-// If we have many many pictures on screen, maybe a shared-pixmap would be better to
-// paint on screen, but for now, this.
-CloseButtonItem::CloseButtonItem(QObject *parent): DiveButtonItem(parent)
-{
-	static QPixmap p = QPixmap(":trash");
+	static QPixmap p = QPixmap(":list-remove-icon");
 	setPixmap(p);
 	setFlag(ItemIgnoresTransformations);
 }
 
+void CloseButtonItem::mousePressEvent(QGraphicsSceneMouseEvent *)
+{
+	qgraphicsitem_cast<DivePictureItem*>(parentItem())->removePicture();
+}
+
 void CloseButtonItem::hide()
 {
-	DiveButtonItem::hide();
+	DivePixmapItem::hide();
 }
 
 void CloseButtonItem::show()
 {
-	DiveButtonItem::show();
+	DivePixmapItem::show();
 }
 
-DivePictureItem::DivePictureItem(QObject *parent): DivePixmapItem(parent),
+DivePictureItem::DivePictureItem(QGraphicsItem *parent): DivePixmapItem(parent),
 	canvas(new QGraphicsRectItem(this)),
-	shadow(new QGraphicsRectItem(this))
+	shadow(new QGraphicsRectItem(this)),
+	button(new CloseButtonItem(this))
 {
 	setFlag(ItemIgnoresTransformations);
 	setAcceptHoverEvents(true);
@@ -53,7 +50,6 @@ DivePictureItem::DivePictureItem(QObject *parent): DivePixmapItem(parent),
 #ifndef SUBSURFACE_MOBILE
 	connect(PreferencesDialog::instance(), SIGNAL(settingsChanged()), this, SLOT(settingsChanged()));
 #endif
-	setVisible(prefs.show_pictures_in_profile);
 
 	canvas->setPen(Qt::NoPen);
 	canvas->setBrush(QColor(Qt::white));
@@ -65,6 +61,10 @@ DivePictureItem::DivePictureItem(QObject *parent): DivePixmapItem(parent),
 	shadow->setBrush(QColor(Qt::lightGray));
 	shadow->setFlag(ItemStacksBehindParent);
 	shadow->setZValue(-2);
+
+	button->setScale(0.2);
+	button->setZValue(7);
+	button->hide();
 }
 
 void DivePictureItem::settingsChanged()
@@ -78,29 +78,18 @@ void DivePictureItem::setPixmap(const QPixmap &pix)
 	QRectF r = boundingRect();
 	canvas->setRect(0 - 10, 0 -10, r.width() + 20, r.height() + 20);
 	shadow->setRect(canvas->rect());
+	button->setPos(boundingRect().width() - button->boundingRect().width() * 0.2,
+				   boundingRect().height() - button->boundingRect().height() * 0.2);
 }
 
-CloseButtonItem *button = NULL;
-void DivePictureItem::hoverEnterEvent(QGraphicsSceneHoverEvent *event)
+void DivePictureItem::hoverEnterEvent(QGraphicsSceneHoverEvent*)
 {
-	Q_UNUSED(event);
 	Animations::scaleTo(this, 1.0);
 	setZValue(5);
 
-	if(!button) {
-		button = new CloseButtonItem();
-		button->setScale(0.2);
-		button->setZValue(7);
-		scene()->addItem(button);
-	}
-	button->setParentItem(this);
-	button->setPos(boundingRect().width() - button->boundingRect().width() * 0.2,
-				   boundingRect().height() - button->boundingRect().height() * 0.2);
 	button->setOpacity(0);
 	button->show();
 	Animations::show(button);
-	button->disconnect();
-	connect(button, SIGNAL(clicked()), this, SLOT(removePicture()));
 }
 
 void DivePictureItem::setFileUrl(const QString &s)
@@ -108,31 +97,22 @@ void DivePictureItem::setFileUrl(const QString &s)
 	fileUrl = s;
 }
 
-void DivePictureItem::hoverLeaveEvent(QGraphicsSceneHoverEvent *event)
+void DivePictureItem::hoverLeaveEvent(QGraphicsSceneHoverEvent*)
 {
-	Q_UNUSED(event);
 	Animations::scaleTo(this, 0.2);
 	setZValue(0);
-	if(button){
-		button->setParentItem(NULL);
-		Animations::hide(button);
-	}
-}
-
-DivePictureItem::~DivePictureItem(){
-	if(button){
-		button->setParentItem(NULL);
-		Animations::hide(button);
-	}
+	Animations::hide(button);
 }
 
 void DivePictureItem::mousePressEvent(QGraphicsSceneMouseEvent *event)
 {
-	Q_UNUSED(event);
-	QDesktopServices::openUrl(QUrl::fromLocalFile(fileUrl));
+	if (event->button() == Qt::LeftButton)
+		QDesktopServices::openUrl(QUrl::fromLocalFile(localFilePath(fileUrl)));
 }
 
 void DivePictureItem::removePicture()
 {
-	DivePictureModel::instance()->removePicture(fileUrl, true);
+#ifndef SUBSURFACE_MOBILE
+	DivePictureModel::instance()->removePictures({ fileUrl });
+#endif
 }

@@ -1,5 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "qt-models/diveplotdatamodel.h"
-#include "core/dive.h"
+#include "qt-models/diveplannermodel.h"
 #include "core/profile.h"
 #include "core/divelist.h"
 #include "core/color.h"
@@ -10,11 +11,11 @@ DivePlotDataModel::DivePlotDataModel(QObject *parent) :
 	dcNr(0)
 {
 	memset(&pInfo, 0, sizeof(pInfo));
+	memset(&plot_deco_state, 0, sizeof(struct deco_state));
 }
 
-int DivePlotDataModel::columnCount(const QModelIndex &parent) const
+int DivePlotDataModel::columnCount(const QModelIndex&) const
 {
-	Q_UNUSED(parent);
 	return COLUMNS;
 }
 
@@ -31,19 +32,17 @@ QVariant DivePlotDataModel::data(const QModelIndex &index, int role) const
 		case TIME:
 			return item.sec;
 		case PRESSURE:
-			return item.pressure[0];
+			return item.pressure[0][0];
 		case TEMPERATURE:
 			return item.temperature;
 		case COLOR:
 			return item.velocity;
 		case USERENTERED:
 			return false;
-		case CYLINDERINDEX:
-			return item.cylinderindex;
 		case SENSOR_PRESSURE:
-			return item.pressure[0];
+			return item.pressure[0][0];
 		case INTERPOLATED_PRESSURE:
-			return item.pressure[1];
+			return item.pressure[0][1];
 		case CEILING:
 			return item.ceiling;
 		case SAC:
@@ -62,6 +61,8 @@ QVariant DivePlotDataModel::data(const QModelIndex &index, int role) const
 			return item.o2sensor[1].mbar / 1000.0;
 		case CCRSENSOR3:
 			return item.o2sensor[2].mbar / 1000.0;
+		case SCR_OC_PO2:
+			return item.scr_OC_pO2.mbar / 1000.0;
 		case HEARTBEAT:
 			return item.heartbeat;
 		case AMBPRESSURE:
@@ -84,7 +85,7 @@ QVariant DivePlotDataModel::data(const QModelIndex &index, int role) const
 	if (role == Qt::BackgroundRole) {
 		switch (index.column()) {
 		case COLOR:
-			return getColor((color_indice_t)(VELOCITY_COLORS_START_IDX + item.velocity));
+			return getColor((color_index_t)(VELOCITY_COLORS_START_IDX + item.velocity));
 		}
 	}
 	return QVariant();
@@ -95,9 +96,8 @@ const plot_info &DivePlotDataModel::data() const
 	return pInfo;
 }
 
-int DivePlotDataModel::rowCount(const QModelIndex &parent) const
+int DivePlotDataModel::rowCount(const QModelIndex&) const
 {
-	Q_UNUSED(parent);
 	return pInfo.nr;
 }
 
@@ -122,8 +122,6 @@ QVariant DivePlotDataModel::headerData(int section, Qt::Orientation orientation,
 		return tr("Color");
 	case USERENTERED:
 		return tr("User entered");
-	case CYLINDERINDEX:
-		return tr("Cylinder index");
 	case SENSOR_PRESSURE:
 		return tr("Pressure S");
 	case INTERPOLATED_PRESSURE:
@@ -207,23 +205,9 @@ unsigned int DivePlotDataModel::dcShown() const
 		return ret;                                           \
 	}
 
-#define MAX_SENSOR_GAS_FUNC(GASFUNC) \
-	double DivePlotDataModel::GASFUNC()	/* CCR: This function finds the largest measured po2 value */ \
-	{					/* by scanning the readings from the three individual o2 sensors. */ \
-		double ret = -1; 		/* This is used for scaling the Y-axis for partial pressures */ \
-		for (int s = 0; s < 3; s++) {	/* when displaying the graphs for individual o2 sensors */ \
-			for (int i = 0, count = rowCount(); i < count; i++) {   /* POTENTIAL PROBLEM: the '3' (no_sensors) is hard-coded here */\
-				if (pInfo.entry[i].o2sensor[s].mbar > ret)      \
-					ret = pInfo.entry[i].o2sensor[s].mbar;  \
-			}							\
-		}								\
-		return (ret / 1000.0);		/* mbar -> bar conversion */				\
-	}
-
 MAX_PPGAS_FUNC(he, pheMax);
 MAX_PPGAS_FUNC(n2, pn2Max);
 MAX_PPGAS_FUNC(o2, po2Max);
-MAX_SENSOR_GAS_FUNC(CCRMax);
 
 void DivePlotDataModel::emitDataChanged()
 {
@@ -234,8 +218,8 @@ void DivePlotDataModel::emitDataChanged()
 void DivePlotDataModel::calculateDecompression()
 {
 	struct divecomputer *dc = select_dc(&displayed_dive);
-	init_decompression(&displayed_dive);
-	calculate_deco_information(&displayed_dive, dc, &pInfo, false);
+	init_decompression(&plot_deco_state, &displayed_dive);
+	calculate_deco_information(&plot_deco_state, &(DivePlannerPointsModel::instance()->final_deco_state), &displayed_dive, dc, &pInfo, false);
 	dataChanged(index(0, CEILING), index(pInfo.nr - 1, TISSUE_16));
 }
 #endif

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #ifndef MODELDELEGATES_H
 #define MODELDELEGATES_H
 
@@ -30,7 +31,7 @@ private:
 class ComboBoxDelegate : public QStyledItemDelegate {
 	Q_OBJECT
 public:
-	explicit ComboBoxDelegate(QAbstractItemModel *model, QObject *parent = 0);
+	explicit ComboBoxDelegate(QAbstractItemModel *model, QObject *parent = 0, bool allowEdit = true);
 	virtual QWidget *createEditor(QWidget *parent, const QStyleOptionViewItem &option, const QModelIndex &index) const;
 	virtual void setEditorData(QWidget *editor, const QModelIndex &index) const;
 	virtual void updateEditorGeometry(QWidget *editor, const QStyleOptionViewItem &option, const QModelIndex &index) const;
@@ -43,7 +44,8 @@ slots:
 	void fakeActivation();
 	void fixTabBehavior();
 	virtual void revertModelData(QWidget *widget, QAbstractItemDelegate::EndEditHint hint) = 0;
-
+private:
+	bool editable;
 protected:
 	QAbstractItemModel *model;
 };
@@ -84,6 +86,16 @@ class AirTypesDelegate : public ComboBoxDelegate {
 	Q_OBJECT
 public:
 	explicit AirTypesDelegate(QObject *parent = 0);
+	virtual void setModelData(QWidget *editor, QAbstractItemModel *model, const QModelIndex &index) const;
+public
+slots:
+	void revertModelData(QWidget *widget, QAbstractItemDelegate::EndEditHint hint);
+};
+
+class DiveTypesDelegate : public ComboBoxDelegate {
+	Q_OBJECT
+public:
+	explicit DiveTypesDelegate(QObject *parent = 0);
 	virtual void setModelData(QWidget *editor, QAbstractItemModel *model, const QModelIndex &index) const;
 public
 slots:

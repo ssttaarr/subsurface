@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1+
 /****************************************************************************
 **
 ** Copyright (C) 2013 Digia Plc and/or its subsidiary(-ies).
@@ -239,11 +240,11 @@ struct QUnixOSVersion
 
 static QString unquote(const char *begin, const char *end)
 {
-    if (*begin == '"') {
-	Q_ASSERT(end[-1] == '"');
-	return QString::fromLatin1(begin + 1, end - begin - 2);
-    }
-    return QString::fromLatin1(begin, end - begin);
+	if (*begin == '"') {
+		Q_ASSERT(end[-1] == '"');
+		return QString::fromLatin1(begin + 1, end - begin - 2);
+	}
+	return QString::fromLatin1(begin, end - begin);
 }
 
 static bool readEtcOsRelease(QUnixOSVersion &v)
@@ -612,9 +613,9 @@ extern "C" {
 bool isWin7Or8()
 {
 #ifdef Q_OS_WIN
-       return (QSysInfo::WindowsVersion & QSysInfo::WV_NT_based) >= QSysInfo::WV_WINDOWS7;
+	return (QSysInfo::WindowsVersion & QSysInfo::WV_NT_based) >= QSysInfo::WV_WINDOWS7;
 #else
-       return false;
+	return false;
 #endif
 }
 }

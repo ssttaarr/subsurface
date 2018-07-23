@@ -1,5 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "qthelper.h"
-#include "helpers.h"
+#include "subsurface-string.h"
+#include "subsurface-string.h"
 #include "gettextfromc.h"
 #include "statistics.h"
 #include "membuffer.h"
@@ -8,9 +10,11 @@
 #include "divecomputer.h"
 #include "time.h"
 #include "gettextfromc.h"
+#include "metadata.h"
 #include <sys/time.h>
 #include "exif.h"
 #include "file.h"
+#include "imagedownloader.h"
 #include "prefs-macros.h"
 #include <QFile>
 #include <QRegExp>
@@ -29,34 +33,28 @@
 #include <QFont>
 #include <QApplication>
 #include <QTextDocument>
+#include <QProgressDialog>	// TODO: remove with convertThumbnails()
+#include <cstdarg>
+#include <cstdint>
 
 #include <libxslt/documents.h>
 
 const char *existing_filename;
 static QLocale loc;
 
-#define translate(_context, arg) trGettext(arg)
 static const QString DEGREE_SIGNS("dD" UTF8_DEGREE);
 
 QString weight_string(int weight_in_grams)
 {
 	QString str;
 	if (get_units()->weight == units::KG) {
-		int gr = weight_in_grams % 1000;
-		int kg = weight_in_grams / 1000;
-		if (kg >= 20.0)
-			str = QString("%1").arg(kg + (gr >= 500 ? 1 : 0));
-		else
-			str = QString("%1.%2").arg(kg).arg((unsigned)(gr + 50) / 100);
+		double kg = (double) weight_in_grams / 1000.0;
+		str = QString("%L1").arg(kg, 0, 'f', kg >= 20.0 ? 0 : 1);
 	} else {
 		double lbs = grams_to_lbs(weight_in_grams);
-		if (lbs >= 40.0)
-			lbs = rint(lbs + 0.5);
-		else
-			lbs = rint(lbs + 0.05);
-		str = QString("%1").arg(lbs, 0, 'f', lbs >= 40.0 ? 0 : 1);
+		str = QString("%L1").arg(lbs, 0, 'f', lbs >= 40.0 ? 0 : 1);
 	}
-	return (str);
+	return str;
 }
 
 QString distance_string(int distanceInMeters)
@@ -64,15 +62,15 @@ QString distance_string(int distanceInMeters)
 	QString str;
 	if(get_units()->length == units::METERS) {
 		if (distanceInMeters >= 1000)
-			str = QString(translate("gettextFromC", "%1km")).arg(distanceInMeters / 1000);
+			str = gettextFromC::tr("%1km").arg(distanceInMeters / 1000);
 		else
-			str = QString(translate("gettextFromC", "%1m")).arg(distanceInMeters);
+			str = gettextFromC::tr("%1m").arg(distanceInMeters);
 	} else {
 		double miles = m_to_mile(distanceInMeters);
 		if (miles >= 1.0)
-			str = QString(translate("gettextFromC", "%1mi")).arg((int)miles);
+			str = gettextFromC::tr("%1mi").arg((int)miles);
 		else
-			str = QString(translate("gettextFromC", "%1yd")).arg((int)(miles * 1760));
+			str = gettextFromC::tr("%1yd").arg((int)(miles * 1760));
 	}
 	return str;
 }
@@ -88,8 +86,8 @@ extern "C" const char *printGPSCoords(int lat, int lon)
 		return strdup("");
 
 	if (prefs.coordinates_traditional) {
-		lath = lat >= 0 ? translate("gettextFromC", "N") : translate("gettextFromC", "S");
-		lonh = lon >= 0 ? translate("gettextFromC", "E") : translate("gettextFromC", "W");
+		lath = lat >= 0 ? gettextFromC::tr("N") : gettextFromC::tr("S");
+		lonh = lon >= 0 ? gettextFromC::tr("E") : gettextFromC::tr("W");
 		lat = abs(lat);
 		lon = abs(lon);
 		latdeg = lat / 1000000U;
@@ -99,12 +97,12 @@ extern "C" const char *printGPSCoords(int lat, int lon)
 		latsec = (latmin % 1000000) * 60;
 		lonsec = (lonmin % 1000000) * 60;
 		result.sprintf("%u%s%02d\'%06.3f\"%s %u%s%02d\'%06.3f\"%s",
-			       latdeg, UTF8_DEGREE, latmin / 1000000, latsec / 1000000, lath.toUtf8().data(),
-			       londeg, UTF8_DEGREE, lonmin / 1000000, lonsec / 1000000, lonh.toUtf8().data());
+			       latdeg, UTF8_DEGREE, latmin / 1000000, latsec / 1000000, qPrintable(lath),
+			       londeg, UTF8_DEGREE, lonmin / 1000000, lonsec / 1000000, qPrintable(lonh));
 	} else {
 		result.sprintf("%f %f", (double) lat / 1000000.0, (double) lon / 1000000.0);
 	}
-	return strdup(result.toUtf8().data());
+	return copy_qstring(result);
 }
 
 /**
@@ -223,10 +221,10 @@ static bool parseSpecialCoords(const QString& txt, double& latitude, double& lon
 
 bool parseGpsText(const QString &gps_text, double *latitude, double *longitude)
 {
-	static const QString POS_LAT = QString("+N") + translate("gettextFromC", "N");
-	static const QString NEG_LAT = QString("-S") + translate("gettextFromC", "S");
-	static const QString POS_LON = QString("+E") + translate("gettextFromC", "E");
-	static const QString NEG_LON = QString("-W") + translate("gettextFromC", "W");
+	static const QString POS_LAT = QString("+N") + gettextFromC::tr("N");
+	static const QString NEG_LAT = QString("-S") + gettextFromC::tr("S");
+	static const QString POS_LON = QString("+E") + gettextFromC::tr("E");
+	static const QString NEG_LON = QString("-W") + gettextFromC::tr("W");
 
 	//remove the useless spaces (but keep the ones separating numbers)
 	static const QRegExp SPACE_CLEANER("\\s*([" + POS_LAT + NEG_LAT + POS_LON +
@@ -264,8 +262,8 @@ bool gpsHasChanged(struct dive *dive, struct dive *master, const QString &gps_te
 	if (!(*parsed = parseGpsText(gps_text, &latitude, &longitude)))
 		return false;
 
-	latudeg = rint(1000000 * latitude);
-	longudeg = rint(1000000 * longitude);
+	latudeg = lrint(1000000 * latitude);
+	longudeg = lrint(1000000 * longitude);
 
 	/* if dive gps didn't change, nothing changed */
 	if (dive->latitude.udeg == latudeg && dive->longitude.udeg == longudeg)
@@ -289,31 +287,6 @@ QList<int> getDivesInTrip(dive_trip_t *trip)
 	}
 	return ret;
 }
-
-// we need this to be uniq, but also make sure
-// it doesn't change during the life time of a Subsurface session
-// oh, and it has no meaning whatsoever - that's why we have the
-// silly initial number and increment by 3 :-)
-int dive_getUniqID(struct dive *d)
-{
-	static QSet<int> ids;
-	static int maxId = 83529;
-
-	int id = d->id;
-	if (id) {
-		if (!ids.contains(id)) {
-			qDebug() << "WTF - only I am allowed to create IDs";
-			ids.insert(id);
-		}
-		return id;
-	}
-	maxId += 3;
-	id = maxId;
-	Q_ASSERT(!ids.contains(id));
-	ids.insert(id);
-	return id;
-}
-
 
 static xmlDocPtr get_stylesheet_doc(const xmlChar *uri, xmlDictPtr, int, void *, xsltLoadType)
 {
@@ -351,23 +324,6 @@ extern "C" xsltStylesheetPtr get_stylesheet(const char *name)
 	return xslt;
 }
 
-
-extern "C" timestamp_t picture_get_timestamp(char *filename)
-{
-	EXIFInfo exif;
-	memblock mem;
-	int retval;
-
-	// filename might not be the actual filename, so let's go via the hash.
-	if (readfile(localFilePath(QString(filename)).toUtf8().data(), &mem) <= 0)
-		return 0;
-	retval = exif.parseFrom((const unsigned char *)mem.buffer, (unsigned)mem.size);
-	free(mem.buffer);
-	if (retval != PARSE_EXIF_SUCCESS)
-		return 0;
-	return exif.epoch();
-}
-
 extern "C" char *move_away(const char *old_path)
 {
 	if (verbose > 1)
@@ -392,13 +348,13 @@ extern "C" char *move_away(const char *old_path)
 #endif
 			return strdup("");
 	}
-	return strdup(qPrintable(newPath));
+	return copy_qstring(newPath);
 }
 
 extern "C" char *get_file_name(const char *fileName)
 {
 	QFileInfo fileInfo(fileName);
-	return strdup(fileInfo.fileName().toUtf8());
+	return copy_qstring(fileInfo.fileName());
 }
 
 extern "C" void copy_image_and_overwrite(const char *cfileName, const char *path, const char *cnewName)
@@ -415,7 +371,7 @@ extern "C" void copy_image_and_overwrite(const char *cfileName, const char *path
 
 extern "C" bool string_sequence_contains(const char *string_sequence, const char *text)
 {
-	if (same_string(text, "") || same_string(string_sequence, ""))
+	if (empty_string(text) || empty_string(string_sequence))
 		return false;
 
 	QString stringSequence(string_sequence);
@@ -478,7 +434,7 @@ extern "C" const char *subsurface_user_agent()
 {
 	static QString uA = getUserAgent();
 
-	return strdup(qPrintable(uA));
+	return copy_qstring(uA);
 }
 
 /* TOOD: Move this to SettingsObjectWrapper, and also fix this complexity.
@@ -509,7 +465,7 @@ QString uiLanguage(QLocale *callerLoc)
 		uiLang = languages[2];
 	else
 		uiLang = languages[0];
-	prefs.locale.lang_locale = copy_string(qPrintable(uiLang));
+	prefs.locale.lang_locale = copy_qstring(uiLang);
 	GET_BOOL("time_format_override", time_format_override);
 	GET_BOOL("date_format_override", date_format_override);
 	GET_TXT("time_format", time_format);
@@ -532,7 +488,7 @@ QString uiLanguage(QLocale *callerLoc)
 	if (callerLoc)
 		*callerLoc = loc;
 
-	if (!prefs.date_format_override || same_string(prefs.date_format_short, "") || same_string(prefs.date_format, "")) {
+	if (!prefs.date_format_override || empty_string(prefs.date_format_short) || empty_string(prefs.date_format)) {
 		// derive our standard date format from what the locale gives us
 		// the short format is fine
 		// the long format uses long weekday and month names, so replace those with the short ones
@@ -543,21 +499,21 @@ QString uiLanguage(QLocale *callerLoc)
 		// special hack for Swedish as our switching from long weekday names to short weekday names
 		// messes things up there
 		dateFormat.replace("'en' 'den' d:'e'", " d");
-		if (!prefs.date_format_override || same_string(prefs.date_format, "")) {
-			free((void*)prefs.date_format);
-			prefs.date_format = strdup(qPrintable(dateFormat));
+		if (!prefs.date_format_override || empty_string(prefs.date_format)) {
+			free((void *)prefs.date_format);
+			prefs.date_format = copy_qstring(dateFormat);
 		}
-		if (!prefs.date_format_override || same_string(prefs.date_format_short, "")) {
-			free((void*)prefs.date_format_short);
-			prefs.date_format_short = strdup(qPrintable(shortDateFormat));
+		if (!prefs.date_format_override || empty_string(prefs.date_format_short)) {
+			free((void *)prefs.date_format_short);
+			prefs.date_format_short = copy_qstring(shortDateFormat);
 		}
 	}
-	if (!prefs.time_format_override || same_string(prefs.time_format, "")) {
+	if (!prefs.time_format_override || empty_string(prefs.time_format)) {
 		timeFormat = loc.timeFormat();
 		timeFormat.replace("(t)", "").replace(" t", "").replace("t", "").replace("hh", "h").replace("HH", "H").replace("'kl'.", "");
 		timeFormat.replace(".ss", "").replace(":ss", "").replace("ss", "");
-		free((void*)prefs.time_format);
-		prefs.time_format = strdup(qPrintable(timeFormat));
+		free((void *)prefs.time_format);
+		prefs.time_format = copy_qstring(timeFormat);
 	}
 	return uiLang;
 }
@@ -567,18 +523,13 @@ QLocale getLocale()
 	return loc;
 }
 
-void set_filename(const char *filename, bool force)
+void set_filename(const char *filename)
 {
-	if (!force && existing_filename)
-		return;
 	free((void *)existing_filename);
-	if (filename)
-		existing_filename = strdup(filename);
-	else
-		existing_filename = NULL;
+	existing_filename = copy_string(filename);
 }
 
-const QString get_dc_nickname(const char *model, uint32_t deviceid)
+QString get_dc_nickname(const char *model, uint32_t deviceid)
 {
 	const DiveComputerNode *existNode = dcList.getExact(model, deviceid);
 
@@ -592,10 +543,10 @@ QString get_depth_string(int mm, bool showunit, bool showdecimal)
 {
 	if (prefs.units.length == units::METERS) {
 		double meters = mm / 1000.0;
-		return QString("%1%2").arg(meters, 0, 'f', (showdecimal && meters < 20.0) ? 1 : 0).arg(showunit ? translate("gettextFromC", "m") : "");
+		return QString("%L1%2").arg(meters, 0, 'f', (showdecimal && meters < 20.0) ? 1 : 0).arg(showunit ? gettextFromC::tr("m") : QString());
 	} else {
 		double feet = mm_to_feet(mm);
-		return QString("%1%2").arg(feet, 0, 'f', 0).arg(showunit ? translate("gettextFromC", "ft") : "");
+		return QString("%L1%2").arg(feet, 0, 'f', 0).arg(showunit ? gettextFromC::tr("ft") : QString());
 	}
 }
 
@@ -607,28 +558,28 @@ QString get_depth_string(depth_t depth, bool showunit, bool showdecimal)
 QString get_depth_unit()
 {
 	if (prefs.units.length == units::METERS)
-		return QString("%1").arg(translate("gettextFromC", "m"));
+		return gettextFromC::tr("m");
 	else
-		return QString("%1").arg(translate("gettextFromC", "ft"));
+		return gettextFromC::tr("ft");
 }
 
 QString get_weight_string(weight_t weight, bool showunit)
 {
 	QString str = weight_string(weight.grams);
 	if (get_units()->weight == units::KG) {
-		str = QString("%1%2").arg(str).arg(showunit ? translate("gettextFromC", "kg") : "");
+		str = QString("%1%2").arg(str, showunit ? gettextFromC::tr("kg") : QString());
 	} else {
-		str = QString("%1%2").arg(str).arg(showunit ? translate("gettextFromC", "lbs") : "");
+		str = QString("%1%2").arg(str, showunit ? gettextFromC::tr("lbs") : QString());
 	}
-	return (str);
+	return str;
 }
 
 QString get_weight_unit()
 {
 	if (prefs.units.weight == units::KG)
-		return QString("%1").arg(translate("gettextFromC", "kg"));
+		return gettextFromC::tr("kg");
 	else
-		return QString("%1").arg(translate("gettextFromC", "lbs"));
+		return gettextFromC::tr("lbs");
 }
 
 QString get_temperature_string(temperature_t temp, bool showunit)
@@ -637,10 +588,10 @@ QString get_temperature_string(temperature_t temp, bool showunit)
 		return ""; //temperature not defined
 	} else if (prefs.units.temperature == units::CELSIUS) {
 		double celsius = mkelvin_to_C(temp.mkelvin);
-		return QString("%1%2%3").arg(celsius, 0, 'f', 1).arg(showunit ? (UTF8_DEGREE) : "").arg(showunit ? translate("gettextFromC", "C") : "");
+		return QString("%L1%2%3").arg(celsius, 0, 'f', 1).arg(showunit ? (UTF8_DEGREE) : "").arg(showunit ? gettextFromC::tr("C") : QString());
 	} else {
 		double fahrenheit = mkelvin_to_F(temp.mkelvin);
-		return QString("%1%2%3").arg(fahrenheit, 0, 'f', 1).arg(showunit ? (UTF8_DEGREE) : "").arg(showunit ? translate("gettextFromC", "F") : "");
+		return QString("%L1%2%3").arg(fahrenheit, 0, 'f', 1).arg(showunit ? (UTF8_DEGREE) : "").arg(showunit ? gettextFromC::tr("F") : QString());
 	}
 }
 
@@ -652,12 +603,17 @@ QString get_temp_unit()
 		return QString(UTF8_DEGREE "F");
 }
 
-QString get_volume_string(volume_t volume, bool showunit)
+QString get_volume_string(int mliter, bool showunit)
 {
 	const char *unit;
 	int decimals;
-	double value = get_volume_units(volume.mliter, &decimals, &unit);
-	return QString("%1%2").arg(value, 0, 'f', decimals).arg(showunit ? unit : "");
+	double value = get_volume_units(mliter, &decimals, &unit);
+	return QString("%L1%2").arg(value, 0, 'f', decimals).arg(showunit ? unit : "");
+}
+
+QString get_volume_string(volume_t volume, bool showunit)
+{
+	return get_volume_string(volume.mliter, showunit);
 }
 
 QString get_volume_unit()
@@ -671,10 +627,10 @@ QString get_pressure_string(pressure_t pressure, bool showunit)
 {
 	if (prefs.units.pressure == units::BAR) {
 		double bar = pressure.mbar / 1000.0;
-		return QString("%1%2").arg(bar, 0, 'f', 1).arg(showunit ? translate("gettextFromC", "bar") : "");
+		return QString("%L1%2").arg(bar, 0, 'f', 0).arg(showunit ? gettextFromC::tr("bar") : QString());
 	} else {
 		double psi = mbar_to_PSI(pressure.mbar);
-		return QString("%1%2").arg(psi, 0, 'f', 0).arg(showunit ? translate("gettextFromC", "psi") : "");
+		return QString("%L1%2").arg(psi, 0, 'f', 0).arg(showunit ? gettextFromC::tr("psi") : QString());
 	}
 }
 
@@ -729,20 +685,6 @@ QString getPrintingTemplatePathBundle()
 	return path;
 }
 
-void copyPath(QString src, QString dst)
-{
-	QDir dir(src);
-	if (!dir.exists())
-		return;
-	foreach (QString d, dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
-		QString dst_path = dst + QDir::separator() + d;
-		dir.mkpath(dst_path);
-		copyPath(src + QDir::separator() + d, dst_path);
-	}
-	foreach (QString f, dir.entryList(QDir::Files))
-		QFile::copy(src + QDir::separator() + f, dst + QDir::separator() + f);
-}
-
 int gettimezoneoffset(timestamp_t when)
 {
 	QDateTime dt1, dt2;
@@ -755,6 +697,38 @@ int gettimezoneoffset(timestamp_t when)
 	return dt2.secsTo(dt1);
 }
 
+QString render_seconds_to_string(int seconds)
+{
+	if (seconds % 60 == 0)
+		return QDateTime::fromTime_t(seconds).toUTC().toString("h:mm");
+	else
+		return QDateTime::fromTime_t(seconds).toUTC().toString("h:mm:ss");
+}
+
+int parseDurationToSeconds(const QString &text)
+{
+	int secs;
+	QString numOnly = text;
+	QString hours, minutes, seconds;
+	numOnly.replace(",", ".").remove(QRegExp("[^-0-9.:]"));
+	if (numOnly.isEmpty())
+		return 0;
+	if (numOnly.contains(':')) {
+		hours = numOnly.left(numOnly.indexOf(':'));
+		minutes = numOnly.right(numOnly.length() - hours.length() - 1);
+		if (minutes.contains(':')) {
+			numOnly = minutes;
+			minutes = numOnly.left(numOnly.indexOf(':'));
+			seconds = numOnly.right(numOnly.length() - minutes.length() - 1);
+		}
+	} else {
+		hours = "0";
+		minutes = numOnly;
+	}
+	secs = lrint(hours.toDouble() * 3600 + minutes.toDouble() * 60 + seconds.toDouble());
+	return secs;
+}
+
 int parseLengthToMm(const QString &text)
 {
 	int mm;
@@ -763,9 +737,9 @@ int parseLengthToMm(const QString &text)
 	if (numOnly.isEmpty())
 		return 0;
 	double number = numOnly.toDouble();
-	if (text.contains(QObject::tr("m"), Qt::CaseInsensitive)) {
-		mm = number * 1000;
-	} else if (text.contains(QObject::tr("ft"), Qt::CaseInsensitive)) {
+	if (text.contains(gettextFromC::tr("m"), Qt::CaseInsensitive)) {
+		mm = lrint(number * 1000);
+	} else if (text.contains(gettextFromC::tr("ft"), Qt::CaseInsensitive)) {
 		mm = feet_to_mm(number);
 	} else {
 		switch (prefs.units.length) {
@@ -773,7 +747,7 @@ int parseLengthToMm(const QString &text)
 			mm = feet_to_mm(number);
 			break;
 		case units::METERS:
-			mm = number * 1000;
+			mm = lrint(number * 1000);
 			break;
 		default:
 			mm = 0;
@@ -791,9 +765,9 @@ int parseTemperatureToMkelvin(const QString &text)
 	if (numOnly.isEmpty())
 		return 0;
 	double number = numOnly.toDouble();
-	if (text.contains(QObject::tr("C"), Qt::CaseInsensitive)) {
+	if (text.contains(gettextFromC::tr("C"), Qt::CaseInsensitive)) {
 		mkelvin = C_to_mkelvin(number);
-	} else if (text.contains(QObject::tr("F"), Qt::CaseInsensitive)) {
+	} else if (text.contains(gettextFromC::tr("F"), Qt::CaseInsensitive)) {
 		mkelvin = F_to_mkelvin(number);
 	} else {
 		switch (prefs.units.temperature) {
@@ -818,14 +792,14 @@ int parseWeightToGrams(const QString &text)
 	if (numOnly.isEmpty())
 		return 0;
 	double number = numOnly.toDouble();
-	if (text.contains(QObject::tr("kg"), Qt::CaseInsensitive)) {
-		grams = rint(number * 1000);
-	} else if (text.contains(QObject::tr("lbs"), Qt::CaseInsensitive)) {
+	if (text.contains(gettextFromC::tr("kg"), Qt::CaseInsensitive)) {
+		grams = lrint(number * 1000);
+	} else if (text.contains(gettextFromC::tr("lbs"), Qt::CaseInsensitive)) {
 		grams = lbs_to_grams(number);
 	} else {
 		switch (prefs.units.weight) {
 		case units::KG:
-			grams = rint(number * 1000);
+			grams = lrint(number * 1000);
 			break;
 		case units::LBS:
 			grams = lbs_to_grams(number);
@@ -845,14 +819,14 @@ int parsePressureToMbar(const QString &text)
 	if (numOnly.isEmpty())
 		return 0;
 	double number = numOnly.toDouble();
-	if (text.contains(QObject::tr("bar"), Qt::CaseInsensitive)) {
-		mbar = rint(number * 1000);
-	} else if (text.contains(QObject::tr("psi"), Qt::CaseInsensitive)) {
+	if (text.contains(gettextFromC::tr("bar"), Qt::CaseInsensitive)) {
+		mbar = lrint(number * 1000);
+	} else if (text.contains(gettextFromC::tr("psi"), Qt::CaseInsensitive)) {
 		mbar = psi_to_mbar(number);
 	} else {
 		switch (prefs.units.pressure) {
 		case units::BAR:
-			mbar = rint(number * 1000);
+			mbar = lrint(number * 1000);
 			break;
 		case units::PSI:
 			mbar = psi_to_mbar(number);
@@ -868,9 +842,9 @@ int parseGasMixO2(const QString &text)
 {
 	QString gasString = text;
 	int o2, number;
-	if (gasString.contains(QObject::tr("AIR"), Qt::CaseInsensitive)) {
+	if (gasString.contains(gettextFromC::tr("AIR"), Qt::CaseInsensitive)) {
 		o2 = O2_IN_AIR;
-	} else if (gasString.contains(QObject::tr("EAN"), Qt::CaseInsensitive)) {
+	} else if (gasString.contains(gettextFromC::tr("EAN"), Qt::CaseInsensitive)) {
 		gasString.remove(QRegExp("[^0-9]"));
 		number = gasString.toInt();
 		o2 = number * 10;
@@ -899,20 +873,59 @@ int parseGasMixHE(const QString &text)
 	return he;
 }
 
-QString get_dive_duration_string(timestamp_t when, QString hourText, QString minutesText)
+QString get_dive_duration_string(timestamp_t when, QString hoursText, QString minutesText, QString secondsText, QString separator, bool isFreeDive)
 {
-	int hrs, mins;
-	mins = (when + 59) / 60;
+	int hrs, mins, fullmins, secs;
+	mins = (when + 30) / 60;
+	fullmins = when / 60;
+	secs = when - 60 * fullmins;
 	hrs = mins / 60;
-	mins -= hrs * 60;
 
 	QString displayTime;
-	if (hrs)
-		displayTime = QString("%1%2%3%4").arg(hrs).arg(hourText).arg(mins, 2, 10, QChar('0')).arg(minutesText);
-	else
+	if (prefs.units.duration_units == units::ALWAYS_HOURS || (prefs.units.duration_units == units::MIXED && hrs)) {
+		mins -= hrs * 60;
+		displayTime = QString("%1%2%3%4%5").arg(hrs).arg(separator == ":" ? "" : hoursText).arg(separator)
+			.arg(mins, 2, 10, QChar('0')).arg(separator == ":" ? hoursText : minutesText);
+	} else if (isFreeDive && ( prefs.units.duration_units == units::MINUTES_ONLY || minutesText != "" )) {
+		// Freedive <1h and we display no hours but only minutes for other dives
+		// --> display a short (5min 35sec) freedives e.g. as "5:35"
+		// Freedive <1h and we display a unit for minutes
+		// --> display a short (5min 35sec) freedives e.g. as "5:35min"
+		if (separator == ":") displayTime = QString("%1%2%3%4").arg(fullmins).arg(separator)
+			.arg(secs, 2, 10, QChar('0')).arg(minutesText);
+		else displayTime = QString("%1%2%3%4%5").arg(fullmins).arg(minutesText).arg(separator)
+			.arg(secs).arg(secondsText);
+	} else if (isFreeDive) {
+		// Mixed display (hh:mm / mm only) and freedive < 1h and we have no unit for minutes
+		// --> Prefix duration with "0:" --> "0:05:35"
+		if (separator == ":") displayTime = QString("%1%2%3%4%5%6").arg(hrs).arg(separator)
+			.arg(fullmins, 2, 10, QChar('0')).arg(separator)
+			.arg(secs, 2, 10, QChar('0')).arg(hoursText);
+		// Separator != ":" and no units for minutes --> unlikely case - remove?
+		else displayTime = QString("%1%2%3%4%5%6%7%8").arg(hrs).arg(hoursText).arg(separator)
+			.arg(fullmins).arg(minutesText).arg(separator)
+			.arg(secs).arg(secondsText);
+	} else {
 		displayTime = QString("%1%2").arg(mins).arg(minutesText);
-
+	}
 	return displayTime;
+}
+
+QString get_dive_surfint_string(timestamp_t when, QString daysText, QString hoursText, QString minutesText, QString separator, int maxdays)
+{
+	int days, hrs, mins;
+	days = when / 3600 / 24;
+	hrs = (when - days * 3600 * 24) / 3600;
+	mins = (when + 30 - days * 3600 * 24 - hrs * 3600) / 60;
+
+	QString displayInt;
+	if (maxdays && days > maxdays) displayInt = gettextFromC::tr("more than %1 days").arg(maxdays);
+	else if (days) displayInt = QString("%1%2%3%4%5%6%7%8").arg(days).arg(daysText).arg(separator)
+		.arg(hrs).arg(hoursText).arg(separator)
+		.arg(mins).arg(minutesText);
+	else displayInt = QString("%1%2%3%4%5").arg(hrs).arg(hoursText).arg(separator)
+		.arg(mins).arg(minutesText);
+	return displayInt;
 }
 
 QString get_dive_date_string(timestamp_t when)
@@ -929,10 +942,20 @@ QString get_short_dive_date_string(timestamp_t when)
 	return loc.toString(ts.toUTC(), QString(prefs.date_format_short) + " " + prefs.time_format);
 }
 
-const char *get_dive_date_c_string(timestamp_t when)
+char *get_dive_date_c_string(timestamp_t when)
 {
 	QString text = get_dive_date_string(when);
-	return strdup(text.toUtf8().data());
+	return copy_qstring(text);
+}
+
+extern "C" char *get_current_date()
+{
+	QDateTime ts(QDateTime::currentDateTime());;
+	QString current_date;
+
+	current_date = loc.toString(ts, QString(prefs.date_format_short));
+
+	return copy_qstring(current_date);
 }
 
 bool is_same_day(timestamp_t trip_when, timestamp_t dive_when)
@@ -948,7 +971,7 @@ bool is_same_day(timestamp_t trip_when, timestamp_t dive_when)
 		utc_mkdate(twhen, &tmt);
 	}
 
-	return ((tmd.tm_mday == tmt.tm_mday) && (tmd.tm_mon == tmt.tm_mon) && (tmd.tm_year == tmt.tm_year));
+	return (tmd.tm_mday == tmt.tm_mday) && (tmd.tm_mon == tmt.tm_mon) && (tmd.tm_year == tmt.tm_year);
 }
 
 QString get_trip_date_string(timestamp_t when, int nr, bool getday)
@@ -959,7 +982,7 @@ QString get_trip_date_string(timestamp_t when, int nr, bool getday)
 	localTime.setTimeSpec(Qt::UTC);
 	QString ret ;
 
-	QString suffix = " " + QObject::tr("(%n dive(s))", "", nr);
+	QString suffix = " " + gettextFromC::tr("(%n dive(s))", "", nr);
 	if (getday) {
 		ret = localTime.date().toString(prefs.date_format) + suffix;
 	} else {
@@ -990,49 +1013,140 @@ extern "C" void reverseGeoLookup(degrees_t latitude, degrees_t longitude, uint32
 		QJsonObject address = obj.value("address").toObject();
 		qDebug() << "found country:" << address.value("country").toString();
 		struct dive_site *ds = get_dive_site_by_uuid(uuid);
-		ds->notes = add_to_string(ds->notes, "countrytag: %s", address.value("country").toString().toUtf8().data());
+		ds->notes = add_to_string(ds->notes, "countrytag: %s", qPrintable(address.value("country").toString()));
 	}
 }
 
-QHash<QString, QByteArray> hashOf;
-QMutex hashOfMutex;
-QHash<QByteArray, QString> localFilenameOf;
-QHash <QString, QImage > thumbnailCache;
+static QMutex hashOfMutex;
+static QHash<QString, QString> localFilenameOf;
 
-extern "C" char * hashstring(char * filename)
-{
-	QMutexLocker locker(&hashOfMutex);
-	return hashOf[QString(filename)].toHex().data();
-}
-
-const QString hashfile_name()
+static const QString hashfile_name()
 {
 	return QString(system_default_directory()).append("/hashes");
 }
 
+static QString thumbnailDir()
+{
+	return QString(system_default_directory()) + "/thumbnails/";
+}
+
+// Calculate thumbnail filename by hashing name of file.
+QString thumbnailFileName(const QString &filename)
+{
+	if (filename.isEmpty())
+		return QString();
+	QCryptographicHash hash(QCryptographicHash::Sha1);
+	hash.addData(filename.toUtf8());
+	return thumbnailDir() + hash.result().toHex();
+}
+
 extern "C" char *hashfile_name_string()
 {
-	return strdup(hashfile_name().toUtf8().data());
+	return copy_qstring(hashfile_name());
+}
+
+// During a transition period, convert old thumbnail-hashes to individual files
+// TODO: remove this code in due course
+static void convertThumbnails(const QHash <QString, QImage> &thumbnails)
+{
+	if (thumbnails.empty())
+		return;
+	// This is a singular occurrence, therefore translating the strings seems not worth it
+	QProgressDialog progress("Convert thumbnails...", "Abort", 0, thumbnails.size());
+	progress.setWindowModality(Qt::WindowModal);
+
+	int count = 0;
+	for (const QString &name: thumbnails.keys()) {
+		const QImage thumbnail = thumbnails[name];
+
+		if (thumbnail.isNull())
+			continue;
+
+		// This is duplicate code (see qt-models/divepicturemodel.cpp)
+		// Not a problem, since this routine will be removed in due course.
+		QString filename = thumbnailFileName(name);
+		if (filename.isEmpty())
+			continue;
+
+		QSaveFile file(filename);
+		if (!file.open(QIODevice::WriteOnly))
+			return;
+		QDataStream stream(&file);
+
+		quint32 type = MEDIATYPE_PICTURE;
+		stream << type;
+		stream << thumbnail;
+		file.commit();
+
+		progress.setValue(++count);
+		if (progress.wasCanceled())
+			break;
+	}
+}
+
+// TODO: This is a temporary helper struct. Remove in due course with convertLocalFilename().
+struct HashToFile {
+	QByteArray hash;
+	QString filename;
+	bool operator< (const HashToFile &h) const {
+		return hash < h.hash;
+	}
+};
+
+// During a transition period, convert the hash->localFilename into a canonicalFilename->localFilename.
+// TODO: remove this code in due course
+static void convertLocalFilename(const QHash<QString, QByteArray> &hashOf, const QHash<QByteArray, QString> &hashToLocal)
+{
+	// Bail out early if there is nothing to do
+	if (hashToLocal.isEmpty())
+		return;
+
+	// Create a vector of hash/filename pairs and sort by hash.
+	// Elements can than be accessed with binary search.
+	QHash<QByteArray, QString> canonicalFilenameByHash;
+	QVector<HashToFile> h2f;
+	h2f.reserve(hashOf.size());
+	for (auto it = hashOf.cbegin(); it != hashOf.cend(); ++it)
+		h2f.append({ it.value(), it.key() });
+	std::sort(h2f.begin(), h2f.end());
+
+	// Make the canonical-to-local connection
+	for (auto it = hashToLocal.cbegin(); it != hashToLocal.cend(); ++it) {
+		QByteArray hash = it.key();
+		HashToFile dummy { hash, QString() };
+		for(auto it2 = std::lower_bound(h2f.begin(), h2f.end(), dummy);
+		    it2 != h2f.end() && it2->hash == hash; ++it2) {
+			// Note that learnPictureFilename cares about all the special cases,
+			// i.e. either filename being empty or both filenames being equal.
+			learnPictureFilename(it2->filename, it.value());
+		}
+		QString canonicalFilename = canonicalFilenameByHash.value(it.key());
+	}
 }
 
 void read_hashes()
 {
 	QFile hashfile(hashfile_name());
-	QMutexLocker locker(&hashOfMutex);
 	if (hashfile.open(QIODevice::ReadOnly)) {
 		QDataStream stream(&hashfile);
+		QHash<QByteArray, QString> localFilenameByHash;
+		QHash<QString, QByteArray> hashOf;
+		stream >> localFilenameByHash;		// For backwards compatibility
+		stream >> hashOf;			// For backwards compatibility
+		QHash <QString, QImage> thumbnailCache;
+		stream >> thumbnailCache;		// For backwards compatibility
+		QMutexLocker locker(&hashOfMutex);
 		stream >> localFilenameOf;
-		stream >> hashOf;
-		stream >> thumbnailCache;
+		locker.unlock();
 		hashfile.close();
+		convertThumbnails(thumbnailCache);
+		convertLocalFilename(hashOf, localFilenameByHash);
 	}
+	QMutexLocker locker(&hashOfMutex);
 	localFilenameOf.remove("");
-	QMutableHashIterator<QString, QByteArray> iter(hashOf);
-	while (iter.hasNext()) {
-		iter.next();
-		if (iter.value().isEmpty())
-			iter.remove();
-	}
+
+	// Make sure that the thumbnail directory exists
+	QDir().mkpath(thumbnailDir());
 }
 
 void write_hashes()
@@ -1042,142 +1156,64 @@ void write_hashes()
 
 	if (hashfile.open(QIODevice::WriteOnly)) {
 		QDataStream stream(&hashfile);
+		stream << QHash<QByteArray, QString>();	// Empty hash to filename - for backwards compatibility
+		stream << QHash<QString, QByteArray>(); // Empty hashes - for backwards compatibility
+		stream << QHash<QString,QImage>();	// Empty thumbnailCache - for backwards compatibility
 		stream << localFilenameOf;
-		stream << hashOf;
-		stream << thumbnailCache;
 		hashfile.commit();
 	} else {
-		qDebug() << "cannot open" << hashfile.fileName();
+		qWarning() << "Cannot open hashfile for writing: " << hashfile.fileName();
 	}
 }
 
-void add_hash(const QString filename, QByteArray hash)
+void learnPictureFilename(const QString &originalName, const QString &localName)
 {
-	if (hash.isEmpty())
+	if (originalName.isEmpty() || localName.isEmpty())
 		return;
 	QMutexLocker locker(&hashOfMutex);
-	hashOf[filename] =  hash;
-	localFilenameOf[hash] = filename;
-}
-
-QByteArray hashFile(const QString filename)
-{
-	QCryptographicHash hash(QCryptographicHash::Sha1);
-	QFile imagefile(filename);
-	if (imagefile.exists() && imagefile.open(QIODevice::ReadOnly)) {
-		hash.addData(&imagefile);
-		add_hash(filename, hash.result());
-		return hash.result();
-	} else {
-		return QByteArray();
-	}
-}
-
-void learnHash(struct picture *picture, QByteArray hash)
-{
-	if (hash.isNull())
-		return;
-	if (picture->hash)
-		free(picture->hash);
-	QMutexLocker locker(&hashOfMutex);
-	hashOf[QString(picture->filename)] = hash;
-	picture->hash = strdup(hash.toHex());
-}
-
-bool haveHash(QString &filename)
-{
-	QMutexLocker locker(&hashOfMutex);
-	return hashOf.contains(filename);
-}
-
-QString localFilePath(const QString originalFilename)
-{
-	QMutexLocker locker(&hashOfMutex);
-
-	if (hashOf.contains(originalFilename) && localFilenameOf.contains(hashOf[originalFilename]))
-		return localFilenameOf[hashOf[originalFilename]];
+	// Only keep track of images where original and local names differ
+	if (originalName == localName)
+		localFilenameOf.remove(originalName);
 	else
-		return originalFilename;
+		localFilenameOf[originalName] = localName;
 }
 
-QString fileFromHash(char *hash)
+QString localFilePath(const QString &originalFilename)
 {
-	if (!hash || !*hash)
-		return "";
 	QMutexLocker locker(&hashOfMutex);
-
-	return localFilenameOf[QByteArray::fromHex(hash)];
+	return localFilenameOf.value(originalFilename, originalFilename);
 }
 
-// This needs to operate on a copy of picture as it frees it after finishing!
-void updateHash(struct picture *picture) {
-	if (!picture)
-		return;
-	QByteArray hash = hashFile(fileFromHash(picture->hash));
-	learnHash(picture, hash);
-	picture_free(picture);
-}
+// TODO: Apparently Qt has no simple way of listing the supported video
+// codecs? Do we have to query them by hand using QMediaPlayer::hasSupport()?
+const QStringList videoExtensionsList = {
+	".avi", ".mp4", ".mov", ".mpeg", ".mpg", ".wmv"
+};
 
-// This needs to operate on a copy of picture as it frees it after finishing!
-void hashPicture(struct picture *picture)
+QStringList mediaExtensionFilters()
 {
-	if (!picture)
-		return;
-	char *oldHash = copy_string(picture->hash);
-	learnHash(picture, hashFile(localFilePath(picture->filename)));
-	if (!same_string(picture->hash, "") && !same_string(picture->hash, oldHash))
-		mark_divelist_changed((true));
-	free(oldHash);
-	picture_free(picture);
+	return imageExtensionFilters() + videoExtensionFilters();
 }
 
-extern "C" void cache_picture(struct picture *picture)
+QStringList imageExtensionFilters()
 {
-	QString filename = picture->filename;
-	if (!haveHash(filename))
-		QtConcurrent::run(hashPicture, clone_picture(picture));
+	QStringList filters;
+	foreach (const QString &format, QImageReader::supportedImageFormats())
+		filters.append("*." + format);
+	return filters;
 }
 
-void learnImages(const QDir dir, int max_recursions)
+QStringList videoExtensionFilters()
 {
-	QStringList filters, files;
-
-	if (max_recursions) {
-		foreach (QString dirname, dir.entryList(QStringList(), QDir::NoDotAndDotDot | QDir::Dirs)) {
-			learnImages(QDir(dir.filePath(dirname)), max_recursions - 1);
-		}
-	}
-
-	foreach (QString format, QImageReader::supportedImageFormats()) {
-		filters.append(QString("*.").append(format));
-	}
-
-	foreach (QString file, dir.entryList(filters, QDir::Files)) {
-		files.append(dir.absoluteFilePath(file));
-	}
-
-	QtConcurrent::blockingMap(files, hashFile);
+	QStringList filters;
+	foreach (const QString &format, videoExtensionsList)
+		filters.append("*" + format);
+	return filters;
 }
 
 extern "C" const char *local_file_path(struct picture *picture)
 {
-	QString hashString = picture->hash;
-	if (hashString.isEmpty()) {
-		QByteArray hash = hashFile(picture->filename);
-		free(picture->hash);
-		picture->hash = strdup(hash.toHex().data());
-	}
-	QString localFileName = fileFromHash(picture->hash);
-	if (localFileName.isEmpty())
-		localFileName = picture->filename;
-	return strdup(qPrintable(localFileName));
-}
-
-extern "C" bool picture_exists(struct picture *picture)
-{
-	QString localFilename = fileFromHash(picture->hash);
-	QByteArray hash = hashFile(localFilename);
-	return same_string(hash.toHex().data(), picture->hash);
+	return copy_qstring(localFilePath(picture->filename));
 }
 
 const QString picturedir()
@@ -1187,49 +1223,13 @@ const QString picturedir()
 
 extern "C" char *picturedir_string()
 {
-	return strdup(picturedir().toUtf8().data());
-}
-
-/* when we get a picture from git storage (local or remote) and can't find the picture
- * based on its hash, we create a local copy with the hash as filename and the appropriate
- * suffix */
-extern "C" void savePictureLocal(struct picture *picture, const char *data, int len)
-{
-	QString dirname = picturedir();
-	QDir localPictureDir(dirname);
-	localPictureDir.mkpath(dirname);
-	QString suffix(picture->filename);
-	suffix.replace(QRegularExpression(".*\\."), "");
-	QString filename(dirname + picture->hash + "." + suffix);
-	QSaveFile out(filename);
-	if (out.open(QIODevice::WriteOnly)) {
-		out.write(data, len);
-		out.commit();
-		add_hash(filename, QByteArray::fromHex(picture->hash));
-	}
-}
-
-extern "C" void picture_load_exif_data(struct picture *p)
-{
-	EXIFInfo exif;
-	memblock mem;
-
-	if (readfile(localFilePath(QString(p->filename)).toUtf8().data(), &mem) <= 0)
-		goto picture_load_exit;
-	if (exif.parseFrom((const unsigned char *)mem.buffer, (unsigned)mem.size) != PARSE_EXIF_SUCCESS)
-		goto picture_load_exit;
-	p->longitude.udeg= lrint(1000000.0 * exif.GeoLocation.Longitude);
-	p->latitude.udeg  = lrint(1000000.0 * exif.GeoLocation.Latitude);
-
-picture_load_exit:
-	free(mem.buffer);
-	return;
+	return copy_qstring(picturedir());
 }
 
 QString get_gas_string(struct gasmix gas)
 {
 	uint o2 = (get_o2(&gas) + 5) / 10, he = (get_he(&gas) + 5) / 10;
-	QString result = gasmix_is_air(&gas) ? QObject::tr("AIR") : he == 0 ? (o2 == 100 ? QObject::tr("OXYGEN") : QString("EAN%1").arg(o2, 2, 10, QChar('0'))) : QString("%1/%2").arg(o2).arg(he);
+	QString result = gasmix_is_air(&gas) ? gettextFromC::tr("AIR") : he == 0 ? (o2 == 100 ? gettextFromC::tr("OXYGEN") : QString("EAN%1").arg(o2, 2, 10, QChar('0'))) : QString("%1/%2").arg(o2).arg(he);
 	return result;
 }
 
@@ -1239,13 +1239,21 @@ QString get_divepoint_gas_string(struct dive *d, const divedatapoint &p)
 	return get_gas_string(d->cylinder[idx].gasmix);
 }
 
+QString get_taglist_string(struct tag_entry *tag_list)
+{
+	char *buffer = taglist_get_tagstring(tag_list);
+	QString ret = QString::fromUtf8(buffer);
+	free(buffer);
+	return ret;
+}
+
 weight_t string_to_weight(const char *str)
 {
 	const char *end;
 	double value = strtod_flags(str, &end, 0);
 	QString rest = QString(end).trimmed();
-	QString local_kg = QObject::tr("kg");
-	QString local_lbs = QObject::tr("lbs");
+	QString local_kg = gettextFromC::tr("kg");
+	QString local_lbs = gettextFromC::tr("lbs");
 	weight_t weight;
 
 	if (rest.startsWith("kg") || rest.startsWith(local_kg))
@@ -1256,7 +1264,7 @@ weight_t string_to_weight(const char *str)
 	if (prefs.units.weight == prefs.units.LBS)
 		goto lbs;
 kg:
-	weight.grams = rint(value * 1000);
+	weight.grams = lrint(value * 1000);
 	return weight;
 lbs:
 	weight.grams = lbs_to_grams(value);
@@ -1268,8 +1276,8 @@ depth_t string_to_depth(const char *str)
 	const char *end;
 	double value = strtod_flags(str, &end, 0);
 	QString rest = QString(end).trimmed();
-	QString local_ft = QObject::tr("ft");
-	QString local_m = QObject::tr("m");
+	QString local_ft = gettextFromC::tr("ft");
+	QString local_m = gettextFromC::tr("m");
 	depth_t depth;
 
 	if (value < 0)
@@ -1281,7 +1289,7 @@ depth_t string_to_depth(const char *str)
 	if (prefs.units.length == prefs.units.FEET)
 		goto ft;
 m:
-	depth.mm = rint(value * 1000);
+	depth.mm = lrint(value * 1000);
 	return depth;
 ft:
 	depth.mm = feet_to_mm(value);
@@ -1293,8 +1301,8 @@ pressure_t string_to_pressure(const char *str)
 	const char *end;
 	double value = strtod_flags(str, &end, 0);
 	QString rest = QString(end).trimmed();
-	QString local_psi = QObject::tr("psi");
-	QString local_bar = QObject::tr("bar");
+	QString local_psi = gettextFromC::tr("psi");
+	QString local_bar = gettextFromC::tr("bar");
 	pressure_t pressure;
 
 	if (rest.startsWith("bar") || rest.startsWith(local_bar))
@@ -1304,7 +1312,7 @@ pressure_t string_to_pressure(const char *str)
 	if (prefs.units.pressure == prefs.units.PSI)
 		goto psi;
 bar:
-	pressure.mbar = rint(value * 1000);
+	pressure.mbar = lrint(value * 1000);
 	return pressure;
 psi:
 	pressure.mbar = psi_to_mbar(value);
@@ -1316,8 +1324,8 @@ volume_t string_to_volume(const char *str, pressure_t workp)
 	const char *end;
 	double value = strtod_flags(str, &end, 0);
 	QString rest = QString(end).trimmed();
-	QString local_l = QObject::tr("l");
-	QString local_cuft = QObject::tr("cuft");
+	QString local_l = gettextFromC::tr("l");
+	QString local_cuft = gettextFromC::tr("cuft");
 	volume_t volume;
 
 	if (rest.startsWith("l") || rest.startsWith("ℓ") || rest.startsWith(local_l))
@@ -1338,7 +1346,7 @@ cuft:
 		value /= bar_to_atm(workp.mbar / 1000.0);
 	value = cuft_to_l(value);
 l:
-	volume.mliter = rint(value * 1000);
+	volume.mliter = lrint(value * 1000);
 	return volume;
 }
 
@@ -1348,7 +1356,7 @@ fraction_t string_to_fraction(const char *str)
 	double value = strtod_flags(str, &end, 0);
 	fraction_t fraction;
 
-	fraction.permille = rint(value * 10);
+	fraction.permille = lrint(value * 10);
 	/*
 	 * Don't permit values less than zero or greater than 100%
 	 */
@@ -1363,11 +1371,11 @@ int getCloudURL(QString &filename)
 {
 	QString email = QString(prefs.cloud_storage_email);
 	email.replace(QRegularExpression("[^a-zA-Z0-9@._+-]"), "");
-	if (email.isEmpty() || same_string(prefs.cloud_storage_password, ""))
+	if (email.isEmpty() || empty_string(prefs.cloud_storage_password))
 		return report_error("Please configure Cloud storage email and password in the preferences");
 	if (email != prefs.cloud_storage_email_encoded) {
-		free(prefs.cloud_storage_email_encoded);
-		prefs.cloud_storage_email_encoded = strdup(qPrintable(email));
+		free((void *)prefs.cloud_storage_email_encoded);
+		prefs.cloud_storage_email_encoded = copy_qstring(email);
 	}
 	filename = QString(QString(prefs.cloud_git_url) + "/%1[%1]").arg(email);
 	if (verbose)
@@ -1379,17 +1387,7 @@ extern "C" char *cloud_url()
 {
 	QString filename;
 	getCloudURL(filename);
-	return strdup(filename.toUtf8().data());
-}
-
-extern "C" bool isCloudUrl(const char *filename)
-{
-	QString email = QString(prefs.cloud_storage_email);
-	email.replace(QRegularExpression("[^a-zA-Z0-9@._+-]"), "");
-	if (!email.isEmpty() &&
-	    QString(QString(prefs.cloud_git_url) + "/%1[%1]").arg(email) == filename)
-		return true;
-	return false;
+	return copy_qstring(filename);
 }
 
 extern "C" bool getProxyString(char **buffer)
@@ -1402,7 +1400,7 @@ extern "C" bool getProxyString(char **buffer)
 		else
 			proxy = QString("http://%1:%2").arg(prefs.proxy_host).arg(prefs.proxy_port);
 		if (buffer)
-			*buffer = strdup(qPrintable(proxy));
+			*buffer = copy_qstring(proxy);
 		return true;
 	}
 	return false;
@@ -1427,14 +1425,14 @@ QByteArray getCurrentAppState()
 	return currentApplicationState;
 }
 
-void setCurrentAppState(QByteArray state)
+void setCurrentAppState(const QByteArray &state)
 {
 	currentApplicationState = state;
 }
 
 extern "C" bool in_planner()
 {
-	return (currentApplicationState == "PlanDive" || currentApplicationState == "EditPlannedDive");
+	return currentApplicationState == "PlanDive" || currentApplicationState == "EditPlannedDive";
 }
 
 extern "C" enum deco_mode decoMode()
@@ -1473,4 +1471,215 @@ QString getUUID()
 	}
 	uuidString.replace("{", "").replace("}", "");
 	return uuidString;
+}
+
+int parse_seabear_header(const char *filename, char **params, int pnr)
+{
+	QFile f(filename);
+
+	f.open(QFile::ReadOnly);
+	QString parseLine = f.readLine();
+
+	/*
+	 * Parse dive number from Seabear CSV header
+	 */
+
+	while ((parseLine = f.readLine().trimmed()).length() > 0 && !f.atEnd()) {
+		if (parseLine.contains("//DIVE NR: ")) {
+			params[pnr++] = strdup("diveNro");
+			params[pnr++] = copy_qstring(parseLine.replace(QString::fromLatin1("//DIVE NR: "), QString::fromLatin1("")));
+			break;
+		}
+	}
+	f.seek(0);
+
+	/*
+	 * Parse header - currently only interested in sample
+	 * interval and hardware version. If we have old format
+	 * the interval value is missing from the header.
+	 */
+
+	while ((parseLine = f.readLine().trimmed()).length() > 0 && !f.atEnd()) {
+		if (parseLine.contains("//Hardware Version: ")) {
+			params[pnr++] = strdup("hw");
+			params[pnr++] = copy_qstring(parseLine.replace(QString::fromLatin1("//Hardware Version: "), QString::fromLatin1("\"Seabear ")).trimmed().append("\""));
+			break;
+		}
+	}
+	f.seek(0);
+
+	/*
+	 * Grab the sample interval
+	 */
+
+	while ((parseLine = f.readLine().trimmed()).length() > 0 && !f.atEnd()) {
+		if (parseLine.contains("//Log interval: ")) {
+			params[pnr++] = strdup("delta");
+			params[pnr++] = copy_qstring(parseLine.remove(QString::fromLatin1("//Log interval: ")).trimmed().remove(QString::fromLatin1(" s")));
+			break;
+		}
+	}
+	f.seek(0);
+
+	/*
+	 * Dive mode, can be: OC, APNEA, BOTTOM TIMER, CCR, CCR SENSORBOARD
+	 * Note that we scan over the "Log interval" on purpose
+	 */
+
+	while ((parseLine = f.readLine().trimmed()).length() > 0 && !f.atEnd()) {
+		QString needle = "//Mode: ";
+		if (parseLine.contains(needle)) {
+			params[pnr++] = strdup("diveMode");
+			params[pnr++] = copy_qstring(parseLine.replace(needle, QString::fromLatin1("")).prepend("\"").append("\""));
+		}
+	}
+	f.seek(0);
+
+	/*
+	 * Grabbing some fields for the extradata
+	 */
+
+	while ((parseLine = f.readLine().trimmed()).length() > 0 && !f.atEnd()) {
+		QString needle = "//Firmware Version: ";
+		if (parseLine.contains(needle)) {
+			params[pnr++] = strdup("Firmware");
+			params[pnr++] = copy_qstring(parseLine.replace(needle, QString::fromLatin1("")).prepend("\"").append("\""));
+		}
+	}
+	f.seek(0);
+
+	while ((parseLine = f.readLine().trimmed()).length() > 0 && !f.atEnd()) {
+		QString needle = "//Serial number: ";
+		if (parseLine.contains(needle)) {
+			params[pnr++] = strdup("Serial");
+			params[pnr++] = copy_qstring(parseLine.replace(needle, QString::fromLatin1("")).prepend("\"").append("\""));
+		}
+	}
+	f.seek(0);
+
+	while ((parseLine = f.readLine().trimmed()).length() > 0 && !f.atEnd()) {
+		QString needle = "//GF: ";
+		if (parseLine.contains(needle)) {
+			params[pnr++] = strdup("GF");
+			params[pnr++] = copy_qstring(parseLine.replace(needle, QString::fromLatin1("")).prepend("\"").append("\""));
+		}
+	}
+	f.seek(0);
+
+	while ((parseLine = f.readLine().trimmed()).length() > 0 && !f.atEnd()) {
+	}
+
+	/*
+	 * Parse CSV fields
+	 */
+
+	parseLine = f.readLine().trimmed();
+
+	QStringList currColumns = parseLine.split(';');
+	unsigned short index = 0;
+	Q_FOREACH (QString columnText, currColumns) {
+		if (columnText == "Time") {
+			params[pnr++] = strdup("timeField");
+			params[pnr++] = intdup(index++);
+		} else if (columnText == "Depth") {
+			params[pnr++] = strdup("depthField");
+			params[pnr++] = intdup(index++);
+		} else if (columnText == "Temperature") {
+			params[pnr++] = strdup("tempField");
+			params[pnr++] = intdup(index++);
+		} else if (columnText == "NDT") {
+			params[pnr++] = strdup("ndlField");
+			params[pnr++] = intdup(index++);
+		} else if (columnText == "TTS") {
+			params[pnr++] = strdup("ttsField");
+			params[pnr++] = intdup(index++);
+		} else if (columnText == "pO2_1") {
+			params[pnr++] = strdup("o2sensor1Field");
+			params[pnr++] = intdup(index++);
+		} else if (columnText == "pO2_2") {
+			params[pnr++] = strdup("o2sensor2Field");
+			params[pnr++] = intdup(index++);
+		} else if (columnText == "pO2_3") {
+			params[pnr++] = strdup("o2sensor3Field");
+			params[pnr++] = intdup(index++);
+		} else if (columnText == "Ceiling") {
+			/* TODO: Add support for dive computer reported ceiling*/
+			params[pnr++] = strdup("ceilingField");
+			params[pnr++] = intdup(index++);
+		} else if (columnText == "Tank pressure") {
+			params[pnr++] = strdup("pressureField");
+			params[pnr++] = intdup(index++);
+		} else {
+			// We do not know about this value
+			qDebug() << "Seabear import found an un-handled field: " << columnText;
+		}
+	}
+
+	/* Separator is ';' and the index for that in DiveLogImportDialog constructor is 2 */
+	params[pnr++] = strdup("separatorIndex");
+	params[pnr++] = intdup(2);
+
+	/* And metric units */
+	params[pnr++] = strdup("units");
+	params[pnr++] = intdup(0);
+
+	params[pnr] = NULL;
+	f.close();
+	return pnr;
+}
+
+char *intdup(int index)
+{
+	char tmpbuf[21];
+
+	snprintf(tmpbuf, sizeof(tmpbuf) - 2, "%d", index);
+	tmpbuf[20] = 0;
+	return strdup(tmpbuf);
+}
+
+QHash<int, double> factor_cache;
+
+QReadWriteLock factorCacheLock;
+extern "C" double cache_value(int tissue, int timestep, enum inertgas inertgas)
+{
+	double value;
+	int key = (timestep << 5) + (tissue << 1);
+	if (inertgas == HE)
+		++key;
+	factorCacheLock.lockForRead();
+	value = factor_cache.value(key);
+	factorCacheLock.unlock();
+	return value;
+}
+
+extern "C" void cache_insert(int tissue, int timestep, enum inertgas inertgas, double value)
+{
+	int key = (timestep << 5) + (tissue << 1);
+	if (inertgas == HE)
+		++key;
+	factorCacheLock.lockForWrite();
+	factor_cache.insert(key, value);
+	factorCacheLock.unlock();
+}
+
+extern "C" void print_qt_versions()
+{
+	printf("%s\n", qPrintable(QStringLiteral("built with Qt Version %1, runtime from Qt Version %2").arg(QT_VERSION_STR).arg(qVersion())));
+}
+
+QMutex planLock;
+
+extern "C" void lock_planner()
+{
+	planLock.lock();
+}
+
+extern "C" void unlock_planner()
+{
+	planLock.unlock();
+}
+
+char *copy_qstring(const QString &s)
+{
+	return strdup(qPrintable(s));
 }

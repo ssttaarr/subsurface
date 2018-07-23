@@ -34,9 +34,9 @@ set (SUBSURFACE_UI
 	diveshareexportdialog.ui
 	downloadfromdivecomputer.ui
 	filterwidget.ui
+	findmovedimagesdialog.ui
 	listfilter.ui
 	locationInformation.ui
-	maintab.ui
 	mainwindow.ui
 	plannerDetails.ui
 	plannerSettings.ui
@@ -51,6 +51,11 @@ set (SUBSURFACE_UI
 	urldialog.ui
 	usersurvey.ui
 	webservices.ui
+	tab-widgets/maintab.ui
+	tab-widgets/TabDiveStatistics.ui
+	tab-widgets/TabDiveInformation.ui
+	tab-widgets/TabDivePhotos.ui
+	tab-widgets/TabDiveExtraInfo.ui
 )
 
 # the interface, in C++
@@ -62,10 +67,11 @@ set(SUBSURFACE_INTERFACE
 	diveplanner.cpp
 	diveshareexportdialog.cpp
 	downloadfromdivecomputer.cpp
-	globe.cpp
+	findmovedimagesdialog.cpp
 	kmessagewidget.cpp
-	maintab.cpp
 	mainwindow.cpp
+	mapwidget.cpp
+	../map-widget/qmlmapwidgethelper.cpp
 	modeldelegates.cpp
 	notificationwidget.cpp
 	simplewidgets.cpp
@@ -82,6 +88,12 @@ set(SUBSURFACE_INTERFACE
 	undocommands.cpp
 	locationinformation.cpp
 	qtwaitingspinner.cpp
+	tab-widgets/TabDiveStatistics.cpp
+	tab-widgets/TabDiveInformation.cpp
+	tab-widgets/TabDivePhotos.cpp
+	tab-widgets/TabDiveExtraInfo.cpp
+	tab-widgets/maintab.cpp
+	tab-widgets/TabBase.cpp
 )
 
 if(NOT NO_USERMANUAL)
@@ -124,4 +136,4 @@ target_link_libraries(subsurface_statistics ${QT_LIBRARIES})
 add_library(subsurface_generated_ui STATIC ${SUBSURFACE_UI_HDRS})
 target_link_libraries(subsurface_generated_ui ${QT_LIBRARIES})
 add_library(subsurface_interface STATIC ${SUBSURFACE_INTERFACE} ${SUBSURFACE_UI_SRCS})
-target_link_libraries(subsurface_interface ${QT_LIBRARIES} ${MARBLE_LIBRARIES} ${GRANTLEE_LIBRARIES} subsurface_desktop_preferences)
+target_link_libraries(subsurface_interface ${QT_LIBRARIES} ${GRANTLEE_LIBRARIES} subsurface_desktop_preferences)

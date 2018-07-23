@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * mainwindow.h
  *
@@ -14,22 +15,18 @@
 #include <QProgressDialog>
 
 #include "ui_mainwindow.h"
+#include "ui_plannerDetails.h"
 #include "desktop-widgets/notificationwidget.h"
 #include "core/windowtitleupdate.h"
 #include "core/gpslocation.h"
 
-struct DiveList;
+#define NUM_RECENT_FILES 4
+
 class QSortFilterProxyModel;
 class DiveTripModel;
-
-class DiveInfo;
-class DiveNotes;
-class Stats;
-class Equipment;
 class QItemSelection;
 class DiveListView;
 class MainTab;
-class ProfileGraphicsView;
 class QWebView;
 class QSettings;
 class UpdateManager;
@@ -44,11 +41,6 @@ class LocationInformationWidget;
 typedef std::pair<QByteArray, QVariant> WidgetProperty;
 typedef QVector<WidgetProperty> PropertyList;
 
-enum MainWindowTitleFormat {
-	MWTF_DEFAULT,
-	MWTF_FILENAME
-};
-
 class MainWindow : public QMainWindow {
 	Q_OBJECT
 public:
@@ -59,24 +51,26 @@ public:
 
 	enum CurrentState {
 		VIEWALL,
-		GLOBE_MAXIMIZED,
+		MAP_MAXIMIZED,
 		INFO_MAXIMIZED,
 		PROFILE_MAXIMIZED,
-		LIST_MAXIMIZED
+		LIST_MAXIMIZED,
+		EDIT
 	};
 
 	MainWindow();
 	virtual ~MainWindow();
 	static MainWindow *instance();
 	MainTab *information();
-	void loadRecentFiles(QSettings *s);
-	void addRecentFile(const QStringList &newFiles);
-	void removeRecentFile(QStringList failedFiles);
+	void loadRecentFiles();
+	void updateRecentFiles();
+	void updateRecentFilesMenu();
+	void addRecentFile(const QString &file, bool update);
 	DiveListView *dive_list();
 	DivePlannerWidget *divePlannerWidget();
 	PlannerSettingsWidget *divePlannerSettingsWidget();
 	LocationInformationWidget *locationInformationWidget();
-	void setTitle(enum MainWindowTitleFormat format = MWTF_FILENAME);
+	void setTitle();
 
 	void loadFiles(const QStringList files);
 	void importFiles(const QStringList importFiles);
@@ -86,14 +80,16 @@ public:
 	ProfileWidget2 *graphics() const;
 	PlannerDetails *plannerDetails() const;
 	void printPlan();
-	void checkSurvey(QSettings *s);
+	void checkSurvey();
 	void setApplicationState(const QByteArray& state);
 	void setStateProperties(const QByteArray& state, const PropertyList& tl, const PropertyList& tr, const PropertyList& bl,const PropertyList& br);
 	bool inPlanner();
 	QUndoStack *undoStack;
 	NotificationWidget *getNotificationWidget();
 	void enableDisableCloudActions();
-	void showError();
+	void setCheckedActionFilterTags(bool checked);
+	void enterEditState();
+	void exitEditState();
 
 private
 slots:
@@ -106,7 +102,7 @@ slots:
 	void on_actionClose_triggered();
 	void on_actionCloudstorageopen_triggered();
 	void on_actionCloudstoragesave_triggered();
-	void on_actionTake_cloud_storage_online_triggered();
+	void on_actionCloudOnline_triggered();
 	void on_actionPrint_triggered();
 	void on_actionPreferences_triggered();
 	void on_actionQuit_triggered();
@@ -127,7 +123,7 @@ slots:
 	void on_actionViewList_triggered();
 	void on_actionViewProfile_triggered();
 	void on_actionViewInfo_triggered();
-	void on_actionViewGlobe_triggered();
+	void on_actionViewMap_triggered();
 	void on_actionViewAll_triggered();
 	void on_actionPreviousDC_triggered();
 	void on_actionNextDC_triggered();
@@ -156,12 +152,15 @@ slots:
 	void setDefaultState();
 	void setAutomaticTitle();
 	void cancelCloudStorageOperation();
+	void unsetProfHR();
+	void unsetProfTissues();
 
 protected:
 	void closeEvent(QCloseEvent *);
 
 signals:
 	void startDiveSiteEdit();
+	void showError(QString message);
 
 public
 slots:
@@ -185,19 +184,27 @@ slots:
 	void socialNetworkRequestUpload();
 	void facebookLoggedIn();
 	void facebookLoggedOut();
+	void updateVariations(QString);
+
 
 private:
 	Ui::MainWindow ui;
 	QAction *actionNextDive;
 	QAction *actionPreviousDive;
+#ifndef NO_USERMANUAL
 	UserManual *helpView;
+#endif
 	CurrentState state;
-	QString filter();
+	CurrentState stateBeforeEdit;
+	QString filter_open();
+	QString filter_import();
 	static MainWindow *m_Instance;
 	QString displayedFilename(QString fullFilename);
 	bool askSaveChanges();
 	bool okToClose(QString message);
 	void closeCurrentFile();
+	void setCurrentFile(const char *f);
+	void updateCloudOnlineStatus();
 	void showProgressBar();
 	void hideProgressBar();
 	void writeSettings();
@@ -205,9 +212,10 @@ private:
 	int file_save_as();
 	void beginChangeState(CurrentState s);
 	void saveSplitterSizes();
-	QString lastUsedDir();
+	void toggleCollapsible(bool toggle);
 	void updateLastUsedDir(const QString &s);
 	void registerApplicationState(const QByteArray& state, QWidget *topLeft, QWidget *topRight, QWidget *bottomLeft, QWidget *bottomRight);
+	void enterState(CurrentState);
 	bool filesAsArguments;
 	UpdateManager *updateManager;
 
@@ -216,9 +224,12 @@ private:
 	void configureToolbar();
 	void setupSocialNetworkMenu();
 	QDialog *survey;
+	QDialog *findMovedImagesDialog;
 	struct dive copyPasteDive;
 	struct dive_components what;
 	QList<QAction *> profileToolbarActions;
+	QStringList recentFiles;
+	QAction *actionsRecent[NUM_RECENT_FILES];
 
 	struct WidgetForQuadrant {
 		WidgetForQuadrant(QWidget *tl = 0, QWidget *tr = 0, QWidget *bl = 0, QWidget *br = 0) :
@@ -245,6 +256,7 @@ private:
 	WindowTitleUpdate *wtu;
 	GpsLocation *locationProvider;
 	QMenu *connections;
+	QAction *share_on_fb;
 };
 
 #endif // MAINWINDOW_H

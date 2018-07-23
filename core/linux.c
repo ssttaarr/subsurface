@@ -1,6 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0
 /* linux.c */
 /* implements Linux specific functions */
+#include "ssrf.h"
 #include "dive.h"
+#include "subsurface-string.h"
 #include "display.h"
 #include "membuffer.h"
 #include <string.h>
@@ -25,7 +28,7 @@ void subsurface_OS_pref_setup(void)
 bool subsurface_ignore_font(const char *font)
 {
 	// there are no old default fonts to ignore
-	(void)font;
+	UNUSED(font);
 	return false;
 }
 
@@ -35,17 +38,17 @@ void subsurface_user_info(struct user_info *user)
 	const char *username = getenv("USER");
 
 	if (pwd) {
-		if (pwd->pw_gecos && *pwd->pw_gecos)
-			user->name = pwd->pw_gecos;
+		if (!empty_string(pwd->pw_gecos))
+			user->name = strdup(pwd->pw_gecos);
 		if (!username)
 			username = pwd->pw_name;
 	}
-	if (username && *username) {
+	if (!empty_string(username)) {
 		char hostname[64];
 		struct membuffer mb = {};
 		gethostname(hostname, sizeof(hostname));
 		put_format(&mb, "%s@%s", username, hostname);
-		user->email = mb_cstring(&mb);
+		user->email = mb_cstring(&mb); // 'email' is heap allocated
 	}
 }
 
@@ -82,18 +85,17 @@ const char *system_default_directory(void)
 
 const char *system_default_filename(void)
 {
-	static char *filename = NULL;
-	if (!filename) {
+	static const char *path = NULL;
+	if (!path) {
 		const char *user = getenv("LOGNAME");
-		if (same_string(user, ""))
+		if (empty_string(user))
 			user = "username";
-		filename = calloc(strlen(user) + 5, 1);
+		char *filename = calloc(strlen(user) + 5, 1);
 		strcat(filename, user);
 		strcat(filename, ".xml");
-	}
-	static const char *path = NULL;
-	if (!path)
 		path = system_default_path_append(filename);
+		free(filename);
+	}
 	return path;
 }
 
@@ -204,6 +206,11 @@ int subsurface_access(const char *path, int mode)
 	return access(path, mode);
 }
 
+int subsurface_stat(const char* path, struct stat* buf)
+{
+	return stat(path, buf);
+}
+
 struct zip *subsurface_zip_open_readonly(const char *path, int flags, int *errorp)
 {
 	return zip_open(path, flags, errorp);
@@ -215,10 +222,8 @@ int subsurface_zip_close(struct zip *zip)
 }
 
 /* win32 console */
-void subsurface_console_init(bool dedicated, bool logfile)
+void subsurface_console_init(void)
 {
-	(void)dedicated;
-	(void)logfile;
 	/* NOP */
 }
 
@@ -229,5 +234,5 @@ void subsurface_console_exit(void)
 
 bool subsurface_user_is_root()
 {
-	return (geteuid() == 0);
+	return geteuid() == 0;
 }

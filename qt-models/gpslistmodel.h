@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #ifndef GPSLISTMODEL_H
 #define GPSLISTMODEL_H
 
@@ -20,7 +21,6 @@ public:
 
 	static GpsListModel *instance();
 	GpsListModel(QObject *parent = 0);
-	void addGpsFix(gpsTracker g);
 	void clear();
 	int rowCount(const QModelIndex &parent = QModelIndex()) const;
 	QHash<int, QByteArray> roleNames() const;

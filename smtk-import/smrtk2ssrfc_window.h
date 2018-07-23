@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #ifndef SMRTK2SSRFC_WINDOW_H
 #define SMRTK2SSRFC_WINDOW_H
 
@@ -21,7 +22,6 @@ public:
 
 private:
 	Ui::Smrtk2ssrfcWindow *ui;
-	QString lastUsedDir();
 	QString filter();
 	void updateLastUsedDir(const QString &s);
 	void closeCurrentFile();

@@ -1,9 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0
 #ifndef SIMPLEWIDGETS_H
 #define SIMPLEWIDGETS_H
 
 class MinMaxAvgWidgetPrivate;
 class QAbstractButton;
 class QNetworkReply;
+class FilterModelBase;
 
 #include <QWidget>
 #include <QGroupBox>
@@ -43,6 +45,7 @@ public:
 	void overrideMinToolTipText(const QString &newTip);
 	void overrideAvgToolTipText(const QString &newTip);
 	void overrideMaxToolTipText(const QString &newTip);
+	void setAvgVisibility(const bool visible);
 	void clear();
 
 private:
@@ -109,6 +112,7 @@ slots:
 	void syncCameraClicked();
 	void dcDateTimeChanged(const QDateTime &);
 	void timeEditChanged(const QTime &time);
+	void timeEditChanged();
 	void updateInvalid();
 	void matchAllImagesToggled(bool);
 
@@ -130,31 +134,6 @@ private:
 };
 
 class QCalendarWidget;
-
-class DateWidget : public QWidget {
-	Q_OBJECT
-public:
-	DateWidget(QWidget *parent = 0);
-	QDate date() const;
-public
-slots:
-	void setDate(const QDate &date);
-
-protected:
-	void paintEvent(QPaintEvent *event);
-	void mousePressEvent(QMouseEvent *event);
-	void focusInEvent(QFocusEvent *);
-	void focusOutEvent(QFocusEvent *);
-	void keyPressEvent(QKeyEvent *);
-	void changeEvent(QEvent *);
-	bool eventFilter(QObject *, QEvent *);
-signals:
-	void dateChanged(const QDate &date);
-
-private:
-	QDate mDate;
-	QCalendarWidget *calendarWidget;
-};
 
 class DiveComponentSelection : public QDialog {
 	Q_OBJECT
@@ -187,53 +166,38 @@ public:
 	Ui::FilterWidget2 ui;
 };
 
-class TagFilter : public QWidget {
-	Q_OBJECT
-public:
-	TagFilter(QWidget *parent = 0);
+class FilterBase : public QWidget {
+	void addContextMenuEntry(const QString &s, void (FilterModelBase::*)());
+protected:
+	FilterBase(FilterModelBase *model, QWidget *parent = 0);
+	FilterModelBase *model;
+	Ui::FilterWidget ui;
 	virtual void showEvent(QShowEvent *);
 	virtual void hideEvent(QHideEvent *);
-
-private:
-	Ui::FilterWidget ui;
 	friend class MultiFilter;
 };
 
-class BuddyFilter : public QWidget {
-	Q_OBJECT
+class TagFilter : public FilterBase {
+public:
+	TagFilter(QWidget *parent = 0);
+};
+
+class BuddyFilter : public FilterBase {
 public:
 	BuddyFilter(QWidget *parent = 0);
-	virtual void showEvent(QShowEvent *);
-	virtual void hideEvent(QHideEvent *);
-
-private:
-	Ui::FilterWidget ui;
 };
 
-class SuitFilter : public QWidget {
-	Q_OBJECT
+class SuitFilter : public FilterBase {
 public:
 	SuitFilter(QWidget *parent = 0);
-	virtual void showEvent(QShowEvent *);
-	virtual void hideEvent(QHideEvent *);
-
-private:
-	Ui::FilterWidget ui;
 };
 
-class LocationFilter : public QWidget {
-	Q_OBJECT
+class LocationFilter : public FilterBase {
 public:
 	LocationFilter(QWidget *parent = 0);
-	virtual void showEvent(QShowEvent *);
-	virtual void hideEvent(QHideEvent *);
-
-private:
-	Ui::FilterWidget ui;
 };
 
 class TextHyperlinkEventFilter : public QObject {
-	Q_OBJECT
 public:
 	explicit TextHyperlinkEventFilter(QTextEdit *txtEdit);
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "facebookconnectwidget.h"
 
 #include <QJsonDocument>
@@ -9,13 +10,13 @@
 #include <QNetworkCookieJar>
 
 #include <QUrlQuery>
-#include <QEventLoop>
 #include <QHttpMultiPart>
 #include <QFile>
 #include <QBuffer>
 #include <QDebug>
 #include <QMessageBox>
 #include <QInputDialog>
+#include <QLoggingCategory>
 #ifdef USE_WEBENGINE
 #include <QWebEngineView>
 #else
@@ -25,20 +26,13 @@
 #include "profile-widget/profilewidget2.h"
 
 #include "core/pref.h"
-#include "core/helpers.h"
+#include "core/qthelper.h"
 #include "core/subsurface-qt/SettingsObjectWrapper.h"
 
 #include "ui_socialnetworksdialog.h"
 #include "ui_facebookconnectwidget.h"
 
-#if SAVE_FB_CREDENTIALS
-#define GET_TXT(name, field)                                             \
-	v = s.value(QString(name));                                      \
-	if (v.isValid())                                                 \
-		prefs.field = strdup(v.toString().toUtf8().constData()); \
-	else                                                             \
-		prefs.field = default_prefs.field
-#endif
+Q_LOGGING_CATEGORY(lcFacebook, "subsurface.facebook")
 
 FacebookManager *FacebookManager::instance()
 {
@@ -46,18 +40,30 @@ FacebookManager *FacebookManager::instance()
 	return self;
 }
 
-FacebookManager::FacebookManager(QObject *parent) : QObject(parent)
+FacebookManager::FacebookManager(QObject *parent) :
+	QObject(parent),
+	manager(new QNetworkAccessManager(this))
 {
+	// log only in verbose mode
+	QLoggingCategory::setFilterRules(QStringLiteral("subsurface.facebook=%1").arg(verbose ? "true" : "false"));
+	connect(this, &FacebookManager::albumIdReceived, this, &FacebookManager::sendDiveToAlbum);
+}
+
+static QString graphApi = QStringLiteral("https://graph.facebook.com/v2.10/");
+
+QUrl FacebookManager::albumListUrl()
+{
+	return QUrl("https://graph.facebook.com/me/albums?access_token=" + QString(prefs.facebook.access_token));
 }
 
 QUrl FacebookManager::connectUrl() {
 	return QUrl("https://www.facebook.com/dialog/oauth?"
-		"client_id=427722490709000"
-		"&redirect_uri=http://www.facebook.com/connect/login_success.html"
-		"&response_type=token,granted_scopes"
-		"&display=popup"
-		"&scope=publish_actions,user_photos"
-	);
+		    "client_id=427722490709000"
+		    "&redirect_uri=http://www.facebook.com/connect/login_success.html"
+		    "&response_type=token,granted_scopes"
+		    "&display=popup"
+		    "&scope=publish_actions,user_photos"
+		    );
 }
 
 bool FacebookManager::loggedIn() {
@@ -66,22 +72,26 @@ bool FacebookManager::loggedIn() {
 
 void FacebookManager::tryLogin(const QUrl& loginResponse)
 {
+	qCDebug(lcFacebook) << "Current url call" << loginResponse;
 	QString result = loginResponse.toString();
-	if (!result.contains("access_token"))
-		return;
-
-	if (result.contains("denied_scopes=publish_actions") || result.contains("denied_scopes=user_photos")) {
-		qDebug() << "user did not allow us access" << result;
+	if (!result.contains("access_token")) {
+		qCDebug(lcFacebook) << "Response without access token!";
 		return;
 	}
+
+	if (result.contains("denied_scopes=publish_actions") || result.contains("denied_scopes=user_photos")) {
+		qCDebug(lcFacebook) << "user did not allow us access" << result;
+		return;
+	}
+
 	int from = result.indexOf("access_token=") + strlen("access_token=");
 	int to = result.indexOf("&expires_in");
 	QString securityToken = result.mid(from, to-from);
 
 	auto fb = SettingsObjectWrapper::instance()->facebook;
 	fb->setAccessToken(securityToken);
+	qCDebug(lcFacebook) << "Got securityToken" << securityToken;
 	requestUserId();
-	emit justLoggedIn(true);
 }
 
 void FacebookManager::logout()
@@ -95,133 +105,209 @@ void FacebookManager::logout()
 
 void FacebookManager::requestAlbumId()
 {
-	QUrl albumListUrl("https://graph.facebook.com/me/albums?access_token=" + QString(prefs.facebook.access_token));
-	QNetworkAccessManager *manager = new QNetworkAccessManager();
-	QNetworkReply *reply = manager->get(QNetworkRequest(albumListUrl));
+	qCDebug(lcFacebook) << "Starting to request the album id" << albumListUrl();
+	QNetworkReply *reply = manager->get(QNetworkRequest(albumListUrl()));
+	connect(reply, &QNetworkReply::finished, this, &FacebookManager::albumListReceived);
+}
 
-	QEventLoop loop;
-	connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-	loop.exec();
-
+void FacebookManager::albumListReceived()
+{
+	qCDebug(lcFacebook) << "Reply for the album id";
+	QNetworkReply *reply = qobject_cast<QNetworkReply*>(sender());
 	QJsonDocument albumsDoc = QJsonDocument::fromJson(reply->readAll());
 	QJsonArray albumObj = albumsDoc.object().value("data").toArray();
 	auto fb = SettingsObjectWrapper::instance()->facebook;
 
+	reply->deleteLater();
 	foreach(const QJsonValue &v, albumObj){
 		QJsonObject obj = v.toObject();
-		if (obj.value("name").toString() == albumName) {
+		if (obj.value("name").toString() == fbInfo.albumName) {
 			fb->setAlbumId(obj.value("id").toString());
+			qCDebug(lcFacebook) << "Album" << fbInfo.albumName << "already exists, using id" << obj.value("id").toString();
+			emit albumIdReceived(fb->albumId());
 			return;
 		}
 	}
 
+	// No album with the name we requested, create a new one.
+	createFacebookAlbum();
+}
+
+void FacebookManager::createFacebookAlbum()
+{
+	qCDebug(lcFacebook) << "Album with name" << fbInfo.albumName << "doesn't exists, creating it.";
 	QUrlQuery params;
-	params.addQueryItem("name", albumName );
+	params.addQueryItem("name", fbInfo.albumName );
 	params.addQueryItem("description", "Subsurface Album");
 	params.addQueryItem("privacy", "{'value': 'SELF'}");
 
-	QNetworkRequest request(albumListUrl);
+	QNetworkRequest request(albumListUrl());
 	request.setHeader(QNetworkRequest::ContentTypeHeader, "application/octet-stream");
-	reply = manager->post(request, params.query().toLocal8Bit());
-	connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-	loop.exec();
 
-	albumsDoc = QJsonDocument::fromJson(reply->readAll());
+	QNetworkReply *reply = manager->post(request, params.query().toUtf8());
+	connect(reply, &QNetworkReply::finished, this, &FacebookManager::facebookAlbumCreated);
+}
+
+void FacebookManager::facebookAlbumCreated()
+{
+	QNetworkReply *reply = qobject_cast<QNetworkReply*>(sender());
+	QJsonDocument albumsDoc = QJsonDocument::fromJson(reply->readAll());
 	QJsonObject album = albumsDoc.object();
+
+	reply->deleteLater();
+
 	if (album.contains("id")) {
+		qCDebug(lcFacebook) << "Album" << fbInfo.albumName << "created successfully with id" << album.value("id").toString();
+		auto fb = SettingsObjectWrapper::instance()->facebook;
 		fb->setAlbumId(album.value("id").toString());
+		emit albumIdReceived(fb->albumId());
 		return;
+	} else {
+		qCDebug(lcFacebook) << "It was not possible to create the album with name" << fbInfo.albumName;
+		qCDebug(lcFacebook).noquote() << "Reply was: " << QString(albumsDoc.toJson(QJsonDocument::Indented));
+		// FIXME: we are lacking 'user_photos' facebook permission to create an album, 
+		// but we are able to upload the image to Facebook (album will be named 'Subsurface Photos')
+		qCDebug(lcFacebook) << "But we are still able to upload data. Album name will be 'Subsurface Photos'";
+		auto fb = SettingsObjectWrapper::instance()->facebook;
+		emit albumIdReceived(fb->albumId());
 	}
 }
 
 void FacebookManager::requestUserId()
 {
+	qCDebug(lcFacebook) << "Requesting user id";
 	QUrl userIdRequest("https://graph.facebook.com/me?fields=id&access_token=" + QString(prefs.facebook.access_token));
-	QNetworkAccessManager *getUserID = new QNetworkAccessManager();
-	QNetworkReply *reply = getUserID->get(QNetworkRequest(userIdRequest));
+	QNetworkReply *reply = manager->get(QNetworkRequest(userIdRequest));
 
-	QEventLoop loop;
-	connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-	loop.exec();
+	connect(reply, &QNetworkReply::finished, this, &FacebookManager::userIdReceived);
+}
 
+void FacebookManager::userIdReceived()
+{
+	QNetworkReply *reply = qobject_cast<QNetworkReply*>(sender());
 	QJsonDocument jsonDoc = QJsonDocument::fromJson(reply->readAll());
 	QJsonObject obj = jsonDoc.object();
-	if (obj.keys().contains("id")){
+	if (obj.keys().contains("id")) {
+		qCDebug(lcFacebook) << "User id requested successfully:" << obj.value("id").toString();
 		SettingsObjectWrapper::instance()->facebook->setUserId(obj.value("id").toString());
-		return;
+		emit sendMessage(tr("Facebook logged in successfully"));
+		emit justLoggedIn(true);
+	} else {
+		emit sendMessage(tr("Error, unknown user id, cannot login."));
+		qCDebug(lcFacebook) << "Error, unknown user id, cannot login.";
 	}
+	reply->deleteLater();
 }
 
-void FacebookManager::setDesiredAlbumName(const QString& a)
+QPixmap FacebookManager::grabProfilePixmap()
 {
-	albumName = a;
+	qCDebug(lcFacebook) << "Grabbing Dive Profile pixmap";
+	ProfileWidget2 *profile = MainWindow::instance()->graphics();
+
+	QSize size = fbInfo.profileSize == FacebookInfo::SMALL  ? QSize(800,600) :
+		     fbInfo.profileSize == FacebookInfo::MEDIUM ? QSize(1024,760) :
+		     fbInfo.profileSize == FacebookInfo::BIG ? QSize(1280,1024) : QSize();
+
+	auto currSize = profile->size();
+	profile->resize(size);
+	profile->setToolTipVisibile(false);
+	QPixmap pix = profile->grab();
+	profile->setToolTipVisibile(true);
+	profile->resize(currSize);
+
+	return pix;
 }
+
 
 /* to be changed to export the currently selected dive as shown on the profile.
  * Much much easier, and its also good to people do not select all the dives
  * and send erroniously *all* of them to facebook. */
-void FacebookManager::sendDive()
+void FacebookManager::sendDiveInit()
 {
+	qCDebug(lcFacebook) << "Starting to upload the dive to facebook";
+
 	SocialNetworkDialog dialog(qApp->activeWindow());
-	if (dialog.exec() != QDialog::Accepted)
+	if (dialog.exec() != QDialog::Accepted) {
+		qCDebug(lcFacebook) << "User cancelled.";
 		return;
+	}
 
-	setDesiredAlbumName(dialog.album());
+	fbInfo.bodyText = dialog.text();
+	fbInfo.profileSize = dialog.profileSize();
+	fbInfo.profileData = grabProfilePixmap();
+	fbInfo.albumName = dialog.album();
+	fbInfo.albumId = QString(); // request Album Id wil handle that.
+
+	// will emit albumIdReceived, that's connected to sendDiveToAlbum
 	requestAlbumId();
+}
 
-	ProfileWidget2 *profile = MainWindow::instance()->graphics();
-	profile->setToolTipVisibile(false);
-	QPixmap pix = QPixmap::grabWidget(profile);
-	profile->setToolTipVisibile(true);
-	QByteArray bytes;
-	QBuffer buffer(&bytes);
-	buffer.open(QIODevice::WriteOnly);
-	pix.save(&buffer, "PNG");
-	QUrl url("https://graph.facebook.com/v2.2/" + QString(prefs.facebook.album_id) + "/photos?" +
+void FacebookManager::sendDiveToAlbum(const QString& albumId)
+{
+	qCDebug(lcFacebook) << "Starting to upload the dive to album" << fbInfo.albumName << "id" << albumId;
+	QUrl url(graphApi + albumId + "/photos?" +
 		 "&access_token=" + QString(prefs.facebook.access_token) +
 		 "&source=image" +
-		 "&message=" + dialog.text().replace("&quot;", "%22"));
+		 "&message=" + fbInfo.bodyText.replace("&quot;", "%22"));
 
-	QNetworkAccessManager *am = new QNetworkAccessManager(this);
 	QNetworkRequest request(url);
 
 	QString bound="margin";
 
 	//according to rfc 1867 we need to put this string here:
-	QByteArray data(QString("--" + bound + "\r\n").toLocal8Bit());
+	QByteArray data(QString("--" + bound + "\r\n").toUtf8());
 	data.append("Content-Disposition: form-data; name=\"action\"\r\n\r\n");
-	data.append("https://graph.facebook.com/v2.2/\r\n");
+	data.append(graphApi + "\r\n");
 	data.append("--" + bound + "\r\n");   //according to rfc 1867
-	data.append("Content-Disposition: form-data; name=\"uploaded\"; filename=\"" + QString::number(qrand()) + ".png\"\r\n");  //name of the input is "uploaded" in my form, next one is a file name.
+
+	//name of the input is "uploaded" in my form, next one is a file name.
+	data.append("Content-Disposition: form-data; name=\"uploaded\"; filename=\"" + QString::number(qrand()) + ".png\"\r\n");
 	data.append("Content-Type: image/jpeg\r\n\r\n"); //data type
+
+	QByteArray bytes;
+	QBuffer buffer(&bytes);
+	buffer.open(QIODevice::WriteOnly);
+	fbInfo.profileData.save(&buffer, "PNG");
+
 	data.append(bytes);   //let's read the file
 	data.append("\r\n");
 	data.append("--" + bound + "--\r\n");  //closing boundary according to rfc 1867
 
-	request.setRawHeader(QString("Content-Type").toLocal8Bit(),QString("multipart/form-data; boundary=" + bound).toLocal8Bit());
-	request.setRawHeader(QString("Content-Length").toLocal8Bit(), QString::number(data.length()).toLocal8Bit());
-	QNetworkReply *reply = am->post(request,data);
+	request.setRawHeader(QByteArray("Content-Type"),QString("multipart/form-data; boundary=" + bound).toUtf8());
+	request.setRawHeader(QByteArray("Content-Length"), QString::number(data.length()).toUtf8());
+	QNetworkReply *reply = manager->post(request,data);
 
-	QEventLoop loop;
-	connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-	loop.exec();
+	connect(reply, &QNetworkReply::finished, this, &FacebookManager::uploadFinished);
+}
 
+void FacebookManager::uploadFinished()
+{
+	qCDebug(lcFacebook) << "Upload finish";
+	auto reply = qobject_cast<QNetworkReply*>(sender());
 	QByteArray response = reply->readAll();
 	QJsonDocument jsonDoc = QJsonDocument::fromJson(response);
 	QJsonObject obj = jsonDoc.object();
+
+	reply->deleteLater();
+
 	if (obj.keys().contains("id")){
-		QMessageBox::information(qApp->activeWindow(),
-			tr("Photo upload sucessfull"),
-			tr("Your dive profile was updated to Facebook."),
-		QMessageBox::Ok);
+		emit sendMessage(tr("Dive uploaded successfully to Facebook"));
 	} else {
-		QMessageBox::information(qApp->activeWindow(),
-			tr("Photo upload failed"),
-			tr("Your dive profile was not updated to Facebook, \n "
-			   "please send the following to the developer. \n"
-			   + response),
-		QMessageBox::Ok);
+		emit sendMessage(tr("Dive upload failed. Please see debug output and send to Subsurface mailing list"));
+		qCDebug(lcFacebook) << "Dive upload failed" << response;
 	}
+
+	emit sendDiveFinished();
+}
+
+void FacebookConnectWidget::showEvent(QShowEvent *event)
+{
+	if (FacebookManager::instance()->loggedIn()) {
+		facebookLoggedIn();
+	} else {
+		facebookDisconnect();
+	}
+	return QDialog::showEvent(event);
 }
 
 FacebookConnectWidget::FacebookConnectWidget(QWidget *parent) : QDialog(parent), ui(new Ui::FacebookConnectWidget) {
@@ -233,11 +319,6 @@ FacebookConnectWidget::FacebookConnectWidget(QWidget *parent) : QDialog(parent),
 	facebookWebView = new QWebView(this);
 #endif
 	ui->fbWebviewContainer->layout()->addWidget(facebookWebView);
-	if (fb->loggedIn()) {
-		facebookLoggedIn();
-	} else {
-		facebookDisconnect();
-	}
 #ifdef USE_WEBENGINE
 	connect(facebookWebView, &QWebEngineView::urlChanged, fb, &FacebookManager::tryLogin);
 #else
@@ -252,10 +333,12 @@ void FacebookConnectWidget::facebookLoggedIn()
 	ui->fbWebviewContainer->hide();
 	ui->fbWebviewContainer->setEnabled(false);
 	ui->FBLabel->setText(tr("To disconnect Subsurface from your Facebook account, use the 'Share on' menu entry."));
+	close();
 }
 
 void FacebookConnectWidget::facebookDisconnect()
 {
+	qCDebug(lcFacebook) << "Disconnecting from facebook";
 	// remove the connect/disconnect button
 	// and instead add the login view
 	ui->fbWebviewContainer->show();
@@ -277,14 +360,23 @@ SocialNetworkDialog::SocialNetworkDialog(QWidget *parent) :
 {
 	ui->setupUi(this);
 	ui->buttonBox->button(QDialogButtonBox::Ok)->setEnabled(false);
-	connect(ui->date, SIGNAL(clicked()), this, SLOT(selectionChanged()));
-	connect(ui->duration, SIGNAL(clicked()), this, SLOT(selectionChanged()));
-	connect(ui->Buddy, SIGNAL(clicked()), this, SLOT(selectionChanged()));
-	connect(ui->Divemaster, SIGNAL(clicked()), this, SLOT(selectionChanged()));
-	connect(ui->Location, SIGNAL(clicked()), this, SLOT(selectionChanged()));
-	connect(ui->Notes, SIGNAL(clicked()), this, SLOT(selectionChanged()));
-	connect(ui->album, SIGNAL(textChanged(QString)), this, SLOT(albumChanged()));
+	connect(ui->date, &QCheckBox::clicked, this, &SocialNetworkDialog::selectionChanged);
+	connect(ui->duration, &QCheckBox::clicked, this, &SocialNetworkDialog::selectionChanged);
+	connect(ui->Buddy, &QCheckBox::clicked, this, &SocialNetworkDialog::selectionChanged);
+	connect(ui->Divemaster, &QCheckBox::clicked, this, &SocialNetworkDialog::selectionChanged);
+	connect(ui->Location, &QCheckBox::clicked, this, &SocialNetworkDialog::selectionChanged);
+	connect(ui->Notes, &QCheckBox::clicked, this, &SocialNetworkDialog::selectionChanged);
+	connect(ui->album, &QLineEdit::textChanged, this, &SocialNetworkDialog::albumChanged);
 }
+
+FacebookInfo::Size SocialNetworkDialog::profileSize() const
+{
+	QString currText = ui->profileSize->currentText();
+	return currText.startsWith(tr("Small")) ? FacebookInfo::SMALL :
+	       currText.startsWith(tr("Medium")) ?  FacebookInfo::MEDIUM :
+	       /* currText.startsWith(tr("Big")) ? */ FacebookInfo::BIG;
+}
+
 
 void SocialNetworkDialog::albumChanged()
 {
@@ -296,12 +388,16 @@ void SocialNetworkDialog::selectionChanged()
 {
 	struct dive *d = current_dive;
 	QString fullText;
+
+	if (!d)
+		return;
+
 	if (ui->date->isChecked()) {
 		fullText += tr("Dive date: %1 \n").arg(get_short_dive_date_string(d->when));
 	}
 	if (ui->duration->isChecked()) {
 		fullText += tr("Duration: %1 \n").arg(get_dive_duration_string(d->duration.seconds,
-									       tr("h:", "abbreviation for hours plus separator"),
+									       tr("h", "abbreviation for hours"),
 									       tr("min", "abbreviation for minutes")));
 	}
 	if (ui->Location->isChecked()) {

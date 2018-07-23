@@ -1,13 +1,14 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "preferences_network.h"
 #include "ui_preferences_network.h"
-#include "core/dive.h"
 #include "subsurfacewebservices.h"
-#include "core/prefs-macros.h"
 #include "core/cloudstorage.h"
+#include "core/dive.h"
 #include "core/subsurface-qt/SettingsObjectWrapper.h"
+#include "core/settings/qPref.h"
 #include <QNetworkProxy>
 
-PreferencesNetwork::PreferencesNetwork() : AbstractPreferencesWidget(tr("Network"),QIcon(":network"), 9), ui(new Ui::PreferencesNetwork())
+PreferencesNetwork::PreferencesNetwork() : AbstractPreferencesWidget(tr("Network"),QIcon(":preferences-system-network-icon"), 9), ui(new Ui::PreferencesNetwork())
 {
 	ui->setupUi(this);
 
@@ -37,10 +38,9 @@ void PreferencesNetwork::refreshSettings()
 	ui->cloud_storage_email->setText(prefs.cloud_storage_email);
 	ui->cloud_storage_password->setText(prefs.cloud_storage_password);
 	ui->save_password_local->setChecked(prefs.save_password_local);
-	ui->cloud_background_sync->setChecked(prefs.cloud_background_sync);
 	ui->save_uid_local->setChecked(prefs.save_userid_local);
 	ui->default_uid->setText(QString(prefs.userid).toUpper());
-	cloudPinNeeded();
+	updateCloudAuthenticationState();
 }
 
 void PreferencesNetwork::syncSettings()
@@ -48,8 +48,8 @@ void PreferencesNetwork::syncSettings()
 	auto cloud = SettingsObjectWrapper::instance()->cloud_storage;
 	auto proxy = SettingsObjectWrapper::instance()->proxy;
 
-	cloud->setUserId(ui->default_uid->text().toUpper());
-	cloud->setSaveUserIdLocal(ui->save_uid_local->checkState());
+	cloud->set_userid(ui->default_uid->text().toUpper());
+	cloud->set_save_userid_local(ui->save_uid_local->checkState());
 
 	proxy->setType(ui->proxyType->itemData(ui->proxyType->currentIndex()).toInt());
 	proxy->setHost(ui->proxyHost->text());
@@ -63,73 +63,84 @@ void PreferencesNetwork::syncSettings()
 	QString newpassword = ui->cloud_storage_new_passwd->text();
 
 	//TODO: Change this to the Cloud Storage Stuff, not preferences.
-	if (prefs.cloud_verification_status == CS_VERIFIED && !newpassword.isEmpty()) {
+	if (prefs.cloud_verification_status == qPref::CS_VERIFIED && !newpassword.isEmpty()) {
 		// deal with password change
 		if (!email.isEmpty() && !password.isEmpty()) {
 			// connect to backend server to check / create credentials
 			QRegularExpression reg("^[a-zA-Z0-9@.+_-]+$");
 			if (!reg.match(email).hasMatch() || (!password.isEmpty() && !reg.match(password).hasMatch())) {
-				report_error(qPrintable(tr("Cloud storage email and password can only consist of letters, numbers, and '.', '-', '_', and '+'.")));
-			} else {
-				CloudStorageAuthenticate *cloudAuth = new CloudStorageAuthenticate(this);
-				connect(cloudAuth, SIGNAL(finishedAuthenticate()), this, SLOT(cloudPinNeeded()));
-				connect(cloudAuth, SIGNAL(passwordChangeSuccessful()), this, SLOT(passwordUpdateSuccessfull()));
-				cloudAuth->backend(email, password, "", newpassword);
-				ui->cloud_storage_new_passwd->setText("");
-				cloud->setNewPassword(newpassword);
+				report_error(qPrintable(tr("Change ignored. Cloud storage email and password can only consist of letters, numbers, and '.', '-', '_', and '+'.")));
+				return;
 			}
+			if (!reg.match(email).hasMatch() || (!newpassword.isEmpty() && !reg.match(newpassword).hasMatch())) {
+				report_error(qPrintable(tr("Change ignored. Cloud storage email and new password can only consist of letters, numbers, and '.', '-', '_', and '+'.")));
+				ui->cloud_storage_new_passwd->setText("");
+				return;
+			}
+			CloudStorageAuthenticate *cloudAuth = new CloudStorageAuthenticate(this);
+			connect(cloudAuth, &CloudStorageAuthenticate::finishedAuthenticate, this, &PreferencesNetwork::updateCloudAuthenticationState);
+			connect(cloudAuth, &CloudStorageAuthenticate::passwordChangeSuccessful, this, &PreferencesNetwork::passwordUpdateSuccessful);
+			cloudAuth->backend(email, password, "", newpassword);
+			ui->cloud_storage_new_passwd->setText("");
+			cloud->set_cloud_storage_newpassword(newpassword);
 		}
-	} else if (prefs.cloud_verification_status == CS_UNKNOWN ||
-		   prefs.cloud_verification_status == CS_INCORRECT_USER_PASSWD ||
+	} else if (prefs.cloud_verification_status == qPref::CS_UNKNOWN ||
+		   prefs.cloud_verification_status == qPref::CS_INCORRECT_USER_PASSWD ||
 		   email != prefs.cloud_storage_email ||
 		   password != prefs.cloud_storage_password) {
 
 		// different credentials - reset verification status
-		cloud->setVerificationStatus(CS_UNKNOWN);
+		int oldVerificationStatus = cloud->cloud_verification_status();
+		cloud->set_cloud_verification_status(qPref::CS_UNKNOWN);
 		if (!email.isEmpty() && !password.isEmpty()) {
 			// connect to backend server to check / create credentials
 			QRegularExpression reg("^[a-zA-Z0-9@.+_-]+$");
 			if (!reg.match(email).hasMatch() || (!password.isEmpty() && !reg.match(password).hasMatch())) {
 				report_error(qPrintable(tr("Cloud storage email and password can only consist of letters, numbers, and '.', '-', '_', and '+'.")));
-			} else {
-				CloudStorageAuthenticate *cloudAuth = new CloudStorageAuthenticate(this);
-				connect(cloudAuth, &CloudStorageAuthenticate::finishedAuthenticate, this, &PreferencesNetwork::cloudPinNeeded);
-				cloudAuth->backend(email, password);
+				cloud->set_cloud_verification_status(oldVerificationStatus);
+				return;
 			}
+			CloudStorageAuthenticate *cloudAuth = new CloudStorageAuthenticate(this);
+			connect(cloudAuth, &CloudStorageAuthenticate::finishedAuthenticate, this, &PreferencesNetwork::updateCloudAuthenticationState);
+			cloudAuth->backend(email, password);
 		}
-	} else if (prefs.cloud_verification_status == CS_NEED_TO_VERIFY) {
+	} else if (prefs.cloud_verification_status == qPref::CS_NEED_TO_VERIFY) {
 		QString pin = ui->cloud_storage_pin->text();
 		if (!pin.isEmpty()) {
 			// connect to backend server to check / create credentials
 			QRegularExpression reg("^[a-zA-Z0-9@.+_-]+$");
 			if (!reg.match(email).hasMatch() || !reg.match(password).hasMatch()) {
 				report_error(qPrintable(tr("Cloud storage email and password can only consist of letters, numbers, and '.', '-', '_', and '+'.")));
+				return;
 			}
 			CloudStorageAuthenticate *cloudAuth = new CloudStorageAuthenticate(this);
-			connect(cloudAuth, SIGNAL(finishedAuthenticate()), this, SLOT(cloudPinNeeded()));
+			connect(cloudAuth, SIGNAL(finishedAuthenticate()), this, SLOT(updateCloudAuthenticationState()));
 			cloudAuth->backend(email, password, pin);
 		}
 	}
-	cloud->setEmail(email);
-	cloud->setSavePasswordLocal(ui->save_password_local->isChecked());
-	cloud->setPassword(password);
-	cloud->setVerificationStatus(prefs.cloud_verification_status);
-	cloud->setBackgroundSync(ui->cloud_background_sync->isChecked());
-	cloud->setBaseUrl(prefs.cloud_base_url);
+	cloud->set_cloud_storage_email(email);
+	cloud->set_save_password_local(ui->save_password_local->isChecked());
+	cloud->set_cloud_storage_password(password);
+	cloud->set_cloud_verification_status(prefs.cloud_verification_status);
+	cloud->set_cloud_base_url(prefs.cloud_base_url);
 }
 
-void PreferencesNetwork::cloudPinNeeded()
+void PreferencesNetwork::updateCloudAuthenticationState()
 {
-	ui->cloud_storage_pin->setEnabled(prefs.cloud_verification_status == CS_NEED_TO_VERIFY);
-	ui->cloud_storage_pin->setVisible(prefs.cloud_verification_status == CS_NEED_TO_VERIFY);
-	ui->cloud_storage_pin_label->setEnabled(prefs.cloud_verification_status == CS_NEED_TO_VERIFY);
-	ui->cloud_storage_pin_label->setVisible(prefs.cloud_verification_status == CS_NEED_TO_VERIFY);
-	ui->cloud_storage_new_passwd->setEnabled(prefs.cloud_verification_status == CS_VERIFIED);
-	ui->cloud_storage_new_passwd->setVisible(prefs.cloud_verification_status == CS_VERIFIED);
-	ui->cloud_storage_new_passwd_label->setEnabled(prefs.cloud_verification_status == CS_VERIFIED);
-	ui->cloud_storage_new_passwd_label->setVisible(prefs.cloud_verification_status == CS_VERIFIED);
-	if (prefs.cloud_verification_status == CS_VERIFIED) {
+	ui->cloud_storage_pin->setEnabled(prefs.cloud_verification_status == qPref::CS_NEED_TO_VERIFY);
+	ui->cloud_storage_pin->setVisible(prefs.cloud_verification_status == qPref::CS_NEED_TO_VERIFY);
+	ui->cloud_storage_pin_label->setEnabled(prefs.cloud_verification_status == qPref::CS_NEED_TO_VERIFY);
+	ui->cloud_storage_pin_label->setVisible(prefs.cloud_verification_status == qPref::CS_NEED_TO_VERIFY);
+	ui->cloud_storage_new_passwd->setEnabled(prefs.cloud_verification_status == qPref::CS_VERIFIED);
+	ui->cloud_storage_new_passwd->setVisible(prefs.cloud_verification_status == qPref::CS_VERIFIED);
+	ui->cloud_storage_new_passwd_label->setEnabled(prefs.cloud_verification_status == qPref::CS_VERIFIED);
+	ui->cloud_storage_new_passwd_label->setVisible(prefs.cloud_verification_status == qPref::CS_VERIFIED);
+	if (prefs.cloud_verification_status == qPref::CS_VERIFIED) {
 		ui->cloudStorageGroupBox->setTitle(tr("Subsurface cloud storage (credentials verified)"));
+	} else if (prefs.cloud_verification_status == qPref::CS_INCORRECT_USER_PASSWD) {
+		ui->cloudStorageGroupBox->setTitle(tr("Subsurface cloud storage (incorrect password)"));
+	} else if (prefs.cloud_verification_status == qPref::CS_NEED_TO_VERIFY) {
+		ui->cloudStorageGroupBox->setTitle(tr("Subsurface cloud storage (PIN required)"));
 	} else {
 		ui->cloudStorageGroupBox->setTitle(tr("Subsurface cloud storage"));
 	}
@@ -152,7 +163,7 @@ void PreferencesNetwork::proxyType_changed(int idx)
 	ui->proxyAuthRequired->setChecked(ui->proxyAuthRequired->isChecked());
 }
 
-void PreferencesNetwork::passwordUpdateSuccessfull()
+void PreferencesNetwork::passwordUpdateSuccessful()
 {
 	ui->cloud_storage_password->setText(prefs.cloud_storage_password);
 }

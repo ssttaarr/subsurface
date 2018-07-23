@@ -3,12 +3,10 @@
 # build Subsurface for Win32
 #
 # this file assumes that you have installed MXE on your system
-# and installed a number of dependencies as well. Latest MXE
-# version from git may not always work for Qt5 and Subsurface. 
-# Try to select an older release version like build-2016-10-12.
+# and installed a number of dependencies as well.
 #
 # cd ~/src
-# git clone --branch build-2016-10-12 https://github.com/mxe/mxe
+# git clone https://github.com/mxe/mxe
 # cd mxe
 #
 # now create a file settings.mk
@@ -20,13 +18,16 @@
 #
 # # This variable controls the targets that will build.
 # MXE_TARGETS :=  i686-w64-mingw32.shared
+#
+# # Uncomment the next line if you want to do debug builds later
+# # qtbase_CONFIGURE_OPTS=-debug-and-release
 #---
 # (documenting this in comments is hard... you need to remove
 # the first '#' of course)
 #
 # now you can start the build
 #
-# make libxml2 libxslt libusb1 libzip qt5 nsis
+# make libxml2 libxslt libusb1 libzip libssh2 curl qt5 nsis
 #
 # After quite a while (depending on your machine anywhere from 15-20
 # minutes to several hours) you should have a working MXE install in
@@ -40,12 +41,9 @@
 #
 # ~/src/mxe                    <- MXE git with Qt5, automake (see above)
 #      /grantlee               <- Grantlee 5.0.0 sources from git
-#      /libssh2                <- from git - v1.6 seems to work
-#      /libcurl                <- from git - 7.42.1 seems to work - rename folder!
 #      /subsurface             <- current subsurface git
-#      /libdivecomputer        <- appropriate libdc/Subsurface-branch branch
-#      /marble-source          <- appropriate marble/Subsurface-branch branch
 #      /libgit2                <- libgit2 0.23.1 or similar
+#      /googlemaps             <- Google Maps plugin for QtLocation from git
 #
 # ~/src/win32                  <- build directory
 #
@@ -70,6 +68,13 @@
 # touch build.libdivecomputer
 # to rebuild libdivecomputer before you build Subsurface
 #
+# If you want to create a installer for the debug build call
+#
+#  bash ../subsurface/packaging/windows/mxe-based-build.sh debug installer
+#
+# please be aware of the fact that this installer will be a few 100MB large
+#
+#
 # please send patches / additions to this file!
 #
 
@@ -85,10 +90,11 @@ JOBS="-j4"
 EXECDIR=`pwd`
 BASEDIR=$(cd "$EXECDIR/.."; pwd)
 BUILDDIR=$(cd "$EXECDIR"; pwd)
+MXEDIR=${MXEDIR:-mxe}
 
 echo $BUILDDIR
 
-if [[ ! -d "$BASEDIR"/mxe ]] ; then
+if [[ ! -d "$BASEDIR"/"$MXEDIR" ]] ; then
 	echo "Please start this from the right directory "
 	echo "usually a winbuild directory parallel to the mxe directory"
 	exit 1
@@ -96,14 +102,28 @@ fi
 
 echo "Building in $BUILDDIR ..."
 
-export PATH="$BASEDIR"/mxe/usr/bin:$PATH:"$BASEDIR"/mxe/usr/i686-w64-mingw32.shared/qt5/bin/
+export PATH="$BASEDIR"/"$MXEDIR"/usr/bin:$PATH:"$BASEDIR"/"$MXEDIR"/usr/i686-w64-mingw32.shared/qt5/bin/
 export CXXFLAGS=-std=c++11
 
 if [[ "$1" == "debug" ]] ; then
 	RELEASE="Debug"
+	RELEASE_MAIN="Debug"
+	RELEASE_GM="debug"
+	DLL_SUFFIX="d"
 	shift
+	if [[ -f Release ]] ; then
+		rm -rf *
+	fi
+	touch Debug
 else
 	RELEASE="Release"
+	RELEASE_MAIN="RelWithDebInfo"
+	RELEASE_GM="release"
+	DLL_SUFFIX=""
+	if [[ -f Debug ]] ; then
+		rm -rf *
+	fi
+	touch Release
 fi
 
 # grantlee
@@ -113,7 +133,7 @@ if [[ ! -d grantlee || -f build.grantlee ]] ; then
 	rm -f build.grantlee
 	mkdir -p grantlee
 	cd grantlee
-	cmake -DCMAKE_TOOLCHAIN_FILE="$BASEDIR"/mxe/usr/i686-w64-mingw32.shared/share/cmake/mxe-conf.cmake \
+	i686-w64-mingw32.shared-cmake \
 		-DCMAKE_BUILD_TYPE=$RELEASE \
 		-DBUILD_TESTS=OFF \
 		"$BASEDIR"/grantlee
@@ -122,61 +142,6 @@ if [[ ! -d grantlee || -f build.grantlee ]] ; then
 	make install
 fi
 
-
-# libssh2:
-
-cd "$BUILDDIR"
-if [[ ! -d libssh2 || -f build.libssh2 ]] ; then
-	rm -f build.libssh2
-	mkdir -p libssh2
-	cd libssh2
-
-	cmake -DCMAKE_TOOLCHAIN_FILE="$BASEDIR"/mxe/usr/i686-w64-mingw32.shared/share/cmake/mxe-conf.cmake \
-		-DCMAKE_BUILD_TYPE=$RELEASE \
-		-DBUILD_EXAMPLES=OFF \
-		-DBUILD_TESTING=OFF \
-		-DBUILD_SHARED_LIBS=ON \
-		"$BASEDIR"/libssh2
-	make $JOBS
-	make install
-	# don't install your dlls in bin, please
-	cp "$BASEDIR"/mxe/usr/i686-w64-mingw32.shared/bin/libssh2.dll "$BASEDIR"/mxe/usr/i686-w64-mingw32.shared/lib
-fi
-
-
-# libcurl
-
-cd "$BUILDDIR"
-if [[ ! -d libcurl || -f build.libcurl ]] ; then
-	rm -f build.libcurl
-	mkdir -p libcurl
-	cd libcurl
-	../../libcurl/configure --host=i686-w64-mingw32.shared \
-		--prefix="$BASEDIR"/mxe/usr/i686-w64-mingw32.shared/ \
-		--disable-ftp \
-		--disable-ldap \
-		--disable-ldaps \
-		--disable-rtsp \
-		--enable-proxy \
-		--enable-dict \
-		--disable-telnet \
-		--disable-tftp \
-		--disable-pop3 \
-		--disable-imap \
-		--disable-smb \
-		--disable-smtp \
-		--disable-gopher \
-		--disable-manual \
-		--with-libssh2="$BASEDIR"/mxe/usr/i686-w64-mingw32.shared/
-
-	# now remove building the executable
-	sed -i 's/SUBDIRS = lib src include/SUBDIRS = lib include/' Makefile
-
-	make $JOBS
-	make install
-fi
-
-
 # libgit2:
 
 cd "$BUILDDIR"
@@ -184,34 +149,42 @@ if [[ ! -d libgit2 || -f build.libgit2 ]] ; then
 	rm -f build.libgit2
 	mkdir -p libgit2
 	cd libgit2
-	cmake -DCMAKE_TOOLCHAIN_FILE="$BASEDIR"/mxe/usr/i686-w64-mingw32.shared/share/cmake/mxe-conf.cmake \
+	i686-w64-mingw32.shared-cmake \
 		-DBUILD_CLAR=OFF -DTHREADSAFE=ON \
 		-DCMAKE_BUILD_TYPE=$RELEASE \
-		-DDLLTOOL="$BASEDIR"/mxe/usr/bin/i686-w64-mingw32.shared-dlltool \
+		-DDLLTOOL="$BASEDIR"/"$MXEDIR"/usr/bin/i686-w64-mingw32.shared-dlltool \
 		"$BASEDIR"/libgit2
 	make $JOBS
 	make install
 fi
 
 # libdivecomputer
-#
-# this one is special because we want to make sure it's in sync
-# with the Linux builds, but we don't want the autoconf files cluttering
-# the original source directory... so the "$BASEDIR"/libdivecomputer is
-# a local clone of the "real" libdivecomputer directory
+# ensure the git submodule is present and the autotools are set up
+
+cd "$BASEDIR"/subsurface
+if [ ! -d libdivecomputer/src ] ; then
+	git submodule init
+	git submodule update --recursive
+fi
+if [ ! -f libdivecomputer/configure ] ; then
+	cd libdivecomputer
+	autoreconf --install
+	autoreconf --install
+fi
 
 cd "$BUILDDIR"
-if [[ ! -d libdivecomputer || -f build.libdivecomputer ]] ; then
+CURRENT_SHA=$(cd "$BASEDIR"/subsurface/libdivecomputer ; git describe)
+PREVIOUS_SHA=$(cat "libdivecomputer.SHA" 2>/dev/null || echo)
+if [ ! "$CURRENT_SHA" = "$PREVIOUS_SHA" ] || [ ! -d libdivecomputer ] || [ -f build.libdivecomputer ] ; then
 	rm -f build.libdivecomputer
-	cd "$BASEDIR"/libdivecomputer
-	git pull
-	cd "$BUILDDIR"
 	mkdir -p libdivecomputer
 	cd libdivecomputer
 
-	"$BASEDIR"/libdivecomputer/configure --host=i686-w64-mingw32.shared \
+	"$BASEDIR"/subsurface/libdivecomputer/configure \
+		CC=i686-w64-mingw32.shared-gcc \
+		--host=i686-w64-mingw32.shared \
 		--enable-shared \
-		--prefix="$BASEDIR"/mxe/usr/i686-w64-mingw32.shared
+		--prefix="$BASEDIR"/"$MXEDIR"/usr/i686-w64-mingw32.shared
 	make $JOBS
 	make install
 else
@@ -224,26 +197,17 @@ else
 	echo ""
 fi
 
-# marble:
-
 cd "$BUILDDIR"
-if [[ ! -d marble || -f build.marble ]] ; then
-	rm -f build.marble
-	mkdir -p marble
-	cd marble
-	cmake -DCMAKE_TOOLCHAIN_FILE="$BASEDIR"/mxe/usr/i686-w64-mingw32.shared/share/cmake/mxe-conf.cmake \
-		-DCMAKE_PREFIX_PATH="$BASEDIR"/mxe/usr/i686-w64-mingw32.shared/qt5 \
-		-DQTONLY=ON -DQT5BUILD=ON \
-		-DBUILD_MARBLE_APPS=OFF -DBUILD_MARBLE_EXAMPLES=OFF \
-		-DBUILD_MARBLE_TESTS=OFF -DBUILD_MARBLE_TOOLS=OFF \
-		-DBUILD_TESTING=OFF -DWITH_DESIGNER_PLUGIN=OFF \
-		-DBUILD_WITH_DBUS=OFF \
-		-DCMAKE_BUILD_TYPE=$RELEASE \
-		"$BASEDIR"/marble-source
-	make $JOBS
-	make install
-	# what the heck is marble doing?
-	mv "$BASEDIR"/mxe/usr/i686-w64-mingw32.shared/libssrfmarblewidget.dll "$BASEDIR"/mxe/usr/i686-w64-mingw32.shared/lib
+if [[ ! -d googlemaps || -f build.googlemaps ]] ; then
+	rm -f build.googlemaps
+	cd "$BASEDIR"/googlemaps
+	git pull
+	cd "$BUILDDIR"
+	mkdir -p googlemaps
+	cd googlemaps
+	"$BASEDIR"/"$MXEDIR"/usr/i686-w64-mingw32.shared/qt5/bin/qmake PREFIX=$"$BASEDIR"/"$MXEDIR"/usr/i686-w64-mingw32.shared "$BASEDIR"/googlemaps/googlemaps.pro
+	make $JOBS $RELEASE_GM
+	make "$RELEASE_GM"-install
 fi
 
 ###############
@@ -257,29 +221,69 @@ echo "Starting Subsurface Build"
 rm -rf subsurface
 
 # first copy the Qt plugins in place
-mkdir -p subsurface/staging/plugins
-cd subsurface/staging/plugins
-cp -a "$BASEDIR"/mxe/usr/i686-w64-mingw32.shared/qt5/plugins/iconengines .
-cp -a "$BASEDIR"/mxe/usr/i686-w64-mingw32.shared/qt5/plugins/imageformats .
-cp -a "$BASEDIR"/mxe/usr/i686-w64-mingw32.shared/qt5/plugins/platforms .
-cp -a "$BASEDIR"/mxe/usr/i686-w64-mingw32.shared/qt5/plugins/printsupport .
+QT_PLUGIN_DIRECTORIES="$BASEDIR/"$MXEDIR"/usr/i686-w64-mingw32.shared/qt5/plugins/iconengines \
+$BASEDIR/"$MXEDIR"/usr/i686-w64-mingw32.shared/qt5/plugins/imageformats \
+$BASEDIR/"$MXEDIR"/usr/i686-w64-mingw32.shared/qt5/plugins/platforms \
+$BASEDIR/"$MXEDIR"/usr/i686-w64-mingw32.shared/qt5/plugins/geoservices \
+$BASEDIR/"$MXEDIR"/usr/i686-w64-mingw32.shared/qt5/plugins/printsupport"
 
-# for some reason we aren't installing libssrfmarblewidget.dll and # Qt5Xml.dll
+STAGING_DIR=$BUILDDIR/subsurface/staging
+STAGING_TESTS_DIR=$BUILDDIR/subsurface/staging_tests
+
+mkdir -p $STAGING_DIR/plugins
+mkdir -p $STAGING_TESTS_DIR
+
+for d in $QT_PLUGIN_DIRECTORIES
+do
+	mkdir -p $STAGING_DIR/plugins/$(basename $d)
+	mkdir -p $STAGING_TESTS_DIR/$(basename $d)
+	for f in $d/*
+	do
+		if [[ "$d" =~  geoservice ]] && [[ ! "$f" =~ googlemaps ]] ; then
+			continue
+		fi
+		if [[ "$RELEASE" == "Release" ]] && ([[ ! -f ${f//d.dll/.dll} || "$f" == "${f//d.dll/.dll}" ]]) ; then
+			cp $f $STAGING_DIR/plugins/$(basename $d)
+			cp $f $STAGING_TESTS_DIR/$(basename $d)
+		elif [[ "$RELEASE" == "Debug" && ! -f ${f//.dll/d.dll} ]] ; then
+			cp $f $STAGING_DIR/plugins/$(basename $d)
+			cp $f $STAGING_TESTS_DIR/$(basename $d)
+		fi
+	done
+done
+
+# next we need the QML modules
+QT_QML_MODULES="$BASEDIR/"$MXEDIR"/usr/i686-w64-mingw32.shared/qt5/qml/QtQuick.2 \
+$BASEDIR/"$MXEDIR"/usr/i686-w64-mingw32.shared/qt5/qml/QtLocation \
+$BASEDIR/"$MXEDIR"/usr/i686-w64-mingw32.shared/qt5/qml/QtPositioning"
+
+mkdir -p $STAGING_DIR/qml
+
+for d in $QT_QML_MODULES
+do
+	cp -a $d $STAGING_DIR/qml
+done
+
+# for some reason we aren't installing Qt5Xml.dll and Qt5Location.dll
 # I need to figure out why and fix that, but for now just manually copy that as well
-cp "$BASEDIR"/mxe/usr/i686-w64-mingw32.shared/lib/libssrfmarblewidget.dll "$BUILDDIR"/subsurface/staging
-cp "$BASEDIR"/mxe/usr/i686-w64-mingw32.shared/qt5/bin/Qt5Xml.dll "$BUILDDIR"/subsurface/staging
+EXTRA_MANUAL_DEPENDENCIES="$BASEDIR/"$MXEDIR"/usr/i686-w64-mingw32.shared/qt5/bin/Qt5Xml$DLL_SUFFIX.dll \
+$BASEDIR/"$MXEDIR"/usr/i686-w64-mingw32.shared/qt5/bin/Qt5Location$DLL_SUFFIX.dll"
+
+for f in $EXTRA_MANUAL_DEPENDENCIES
+do
+    cp $f $STAGING_DIR
+    cp $f $STAGING_TESTS_DIR
+done
 
 cd "$BUILDDIR"/subsurface
 
-cmake -DCMAKE_TOOLCHAIN_FILE="$BASEDIR"/mxe/usr/i686-w64-mingw32.shared/share/cmake/mxe-conf.cmake \
-	-DCMAKE_PREFIX_PATH="$BASEDIR"/mxe/usr/i686-w64-mingw32.shared/qt5 \
-	-DCMAKE_BUILD_TYPE=$RELEASE \
-	-DQT_TRANSLATION_DIR="$BASEDIR"/mxe/usr/i686-w64-mingw32.shared/qt5/translations \
+i686-w64-mingw32.shared-cmake \
+	-DCMAKE_PREFIX_PATH="$BASEDIR"/"$MXEDIR"/usr/i686-w64-mingw32.shared/qt5 \
+	-DCMAKE_BUILD_TYPE=$RELEASE_MAIN \
+	-DQT_TRANSLATION_DIR="$BASEDIR"/"$MXEDIR"/usr/i686-w64-mingw32.shared/qt5/translations \
 	-DMAKENSIS=i686-w64-mingw32.shared-makensis \
-	-DLIBDIVECOMPUTER_INCLUDE_DIR="$BASEDIR"/mxe/usr/i686-w64-mingw32.shared/include \
-	-DLIBDIVECOMPUTER_LIBRARIES="$BASEDIR"/mxe/usr/i686-w64-mingw32.shared/lib/libdivecomputer.dll.a \
-	-DMARBLE_INCLUDE_DIR="$BASEDIR"/mxe/usr/i686-w64-mingw32.shared/include \
-	-DMARBLE_LIBRARIES="$BASEDIR"/mxe/usr/i686-w64-mingw32.shared/lib/libssrfmarblewidget.dll \
+	-DLIBDIVECOMPUTER_INCLUDE_DIR="$BASEDIR"/"$MXEDIR"/usr/i686-w64-mingw32.shared/include \
+	-DLIBDIVECOMPUTER_LIBRARIES="$BASEDIR"/"$MXEDIR"/usr/i686-w64-mingw32.shared/lib/libdivecomputer.dll.a \
 	-DMAKE_TESTS=OFF \
 	"$BASEDIR"/subsurface
 

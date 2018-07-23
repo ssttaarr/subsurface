@@ -1,9 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "desktop-widgets/diveshareexportdialog.h"
 #include "ui_diveshareexportdialog.h"
 #include "desktop-widgets/mainwindow.h"
 #include "core/save-html.h"
 #include "desktop-widgets/subsurfacewebservices.h"
-#include "core/helpers.h"
+#include "core/qthelper.h"
 #include "core/cloudstorage.h"
 
 #include <QDesktopServices>
@@ -31,7 +32,6 @@ void DiveShareExportDialog::UIDFromBrowser()
 DiveShareExportDialog *DiveShareExportDialog::instance()
 {
 	static DiveShareExportDialog *self = new DiveShareExportDialog(MainWindow::instance());
-	self->setAttribute(Qt::WA_QuitOnClose, false);
 	self->ui->txtResult->setHtml("");
 	self->ui->buttonBox->setStandardButtons(QDialogButtonBox::Cancel);
 	return self;

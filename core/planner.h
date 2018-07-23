@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #ifndef PLANNER_H
 #define PLANNER_H
 
@@ -20,11 +21,12 @@ extern void get_gas_at_time(struct dive *dive, struct divecomputer *dc, duration
 extern int get_cylinderid_at_time(struct dive *dive, struct divecomputer *dc, duration_t time);
 extern int get_gasidx(struct dive *dive, struct gasmix *mix);
 extern bool diveplan_empty(struct diveplan *diveplan);
+extern void add_plan_to_notes(struct diveplan *diveplan, struct dive *dive, bool show_disclaimer, int error);
 
 extern void free_dps(struct diveplan *diveplan);
 extern struct dive *planned_dive;
 extern char *cache_data;
-extern const char *disclaimer;
+extern char *disclaimer;
 extern double plangflow, plangfhigh;
 
 #ifdef __cplusplus

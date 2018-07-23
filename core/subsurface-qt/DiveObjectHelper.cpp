@@ -1,11 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "DiveObjectHelper.h"
 
 #include <QDateTime>
 #include <QTextDocument>
 
-#include "../qthelper.h"
-#include "../helpers.h"
-#include "../../qt-models/tankinfomodel.h"
+#include "core/qthelper.h"
+#include "core/subsurface-string.h"
+#include "qt-models/tankinfomodel.h"
 
 static QString EMPTY_DIVE_STRING = QStringLiteral("");
 enum returnPressureSelector {START_PRESSURE, END_PRESSURE};
@@ -26,7 +27,7 @@ static QString getFormattedCylinder(struct dive *dive, unsigned int idx)
 	const char *desc = cyl->type.description;
 	if (!desc && idx > 0)
 		return QString(EMPTY_DIVE_STRING);
-	QString fmt = desc ? QString(desc) : QObject::tr("unknown");
+	QString fmt = desc ? QString(desc) : gettextFromC::tr("unknown");
 	fmt += ", " + get_volume_string(cyl->type.size, true);
 	fmt += ", " + get_pressure_string(cyl->type.workingpressure, true);
 	fmt += ", " + get_pressure_string(cyl->start, false) + " - " + get_pressure_string(cyl->end, true);
@@ -84,7 +85,7 @@ QString DiveObjectHelper::date() const
 {
 	QDateTime localTime = QDateTime::fromMSecsSinceEpoch(1000*m_dive->when, Qt::UTC);
 	localTime.setTimeSpec(Qt::UTC);
-	return localTime.date().toString(prefs.date_format);
+	return localTime.date().toString(prefs.date_format_short);
 }
 
 timestamp_t DiveObjectHelper::timestamp() const
@@ -109,9 +110,26 @@ QString DiveObjectHelper::gps() const
 	struct dive_site *ds = get_dive_site_by_uuid(m_dive->dive_site_uuid);
 	return ds ? QString(printGPSCoords(ds->latitude.udeg, ds->longitude.udeg)) : QString();
 }
+
+QString DiveObjectHelper::gps_decimal() const
+{
+	bool savep = prefs.coordinates_traditional;
+	QString val;
+
+	prefs.coordinates_traditional = false;
+	val = gps();
+	prefs.coordinates_traditional = savep;
+	return val;
+}
+
+QVariant DiveObjectHelper::dive_site_uuid() const
+{
+	return QVariant::fromValue(m_dive->dive_site_uuid);
+}
+
 QString DiveObjectHelper::duration() const
 {
-	return get_dive_duration_string(m_dive->duration.seconds, QObject::tr("h:"), QObject::tr("min"));
+	return get_dive_duration_string(m_dive->duration.seconds, gettextFromC::tr("h"), gettextFromC::tr("min"));
 }
 
 bool DiveObjectHelper::noDive() const
@@ -174,9 +192,7 @@ QString DiveObjectHelper::notes() const
 
 QString DiveObjectHelper::tags() const
 {
-	static char buffer[256];
-	taglist_get_tagstring(m_dive->tag_list, buffer, 256);
-	return QString(buffer);
+	return get_taglist_string(m_dive->tag_list);
 }
 
 QString DiveObjectHelper::gas() const
@@ -267,7 +283,7 @@ QStringList DiveObjectHelper::cylinderList() const
 		}
 	}
 
-	for (unsigned long ti = 0; ti < sizeof(tank_info) && tank_info[ti].name != NULL; ti++) {
+	for (unsigned long ti = 0; ti < MAX_TANK_INFO && tank_info[ti].name != NULL; ti++) {
 		QString cyl = tank_info[ti].name;
 		if (cyl == EMPTY_DIVE_STRING)
 			continue;
@@ -320,12 +336,14 @@ QString DiveObjectHelper::tripMeta() const
 	QString ret = EMPTY_DIVE_STRING;
 	struct dive_trip *dt = m_dive->divetrip;
 	if (dt) {
-		QString numDives = tr("%1 dive(s)").arg(dt->nrdives);
+		QString numDives = tr("(%n dive(s))", "", dt->nrdives);
 		QString title(dt->location);
+		QDateTime firstTime = QDateTime::fromMSecsSinceEpoch(1000*dt->when, Qt::UTC);
+		QString firstMonth = firstTime.toString("MMM");
+		QString tripDate = QStringLiteral("%1@%2").arg(firstMonth,firstTime.toString("yy"));
+;
 		if (title.isEmpty()) {
 			// so use the date range
-			QDateTime firstTime = QDateTime::fromMSecsSinceEpoch(1000*dt->when, Qt::UTC);
-			QString firstMonth = firstTime.toString("MMM");
 			QString firstYear = firstTime.toString("yyyy");
 			QDateTime lastTime = QDateTime::fromMSecsSinceEpoch(1000*dt->dives->when, Qt::UTC);
 			QString lastMonth = lastTime.toString("MMM");
@@ -337,9 +355,15 @@ QString DiveObjectHelper::tripMeta() const
 			else
 				title = firstMonth + " " + firstYear + " - " + lastMonth + " " + lastYear;
 		}
-		ret = QString::number((quint64)m_dive->divetrip, 16) + QLatin1Literal("::") + QStringLiteral("%1 (%2)").arg(title, numDives);
+		ret = QString::number((quint64)m_dive->divetrip, 16) + QLatin1Literal("++") +  tripDate + QLatin1Literal("::") + QStringLiteral("%1 %2").arg(title, numDives);
 	}
 	return ret;
+}
+
+int DiveObjectHelper::tripNrDives() const
+{
+	struct dive_trip *dt = m_dive->divetrip;
+	return dt ? dt->nrdives : 0;
 }
 
 int DiveObjectHelper::maxcns() const
@@ -394,56 +418,4 @@ QString DiveObjectHelper::firstGas() const
 	QString gas;
 	gas = get_gas_string(m_dive->cylinder[0].gasmix);
 	return gas;
-}
-
-QStringList DiveObjectHelper::suitList() const
-{
-	QStringList suits;
-	struct dive *d;
-	int i = 0;
-	for_each_dive (i, d) {
-		QString temp = d->suit;
-		if (!temp.isEmpty())
-			suits << d->suit;
-	}
-	suits.removeDuplicates();
-	suits.sort();
-	return suits;
-}
-
-QStringList DiveObjectHelper::buddyList() const
-{
-	QStringList buddies;
-	struct dive *d;
-	int i = 0;
-	for_each_dive (i, d) {
-		QString temp = d->buddy;
-		if (!temp.isEmpty() && !temp.contains(",")){
-			buddies << d->buddy;
-		}
-		else if (!temp.isEmpty()){
-			QRegExp sep("(,\\s)");
-			QStringList tempList = temp.split(sep);
-			buddies << tempList;
-			buddies << tr("Multiple Buddies");
-		}
-	}
-	buddies.removeDuplicates();
-	buddies.sort();
-	return buddies;
-}
-
-QStringList DiveObjectHelper::divemasterList() const
-{
-	QStringList divemasters;
-	struct dive *d;
-	int i = 0;
-	for_each_dive (i, d) {
-		QString temp = d->divemaster;
-		if (!temp.isEmpty())
-			divemasters << d->divemaster;
-	}
-	divemasters.removeDuplicates();
-	divemasters.sort();
-	return divemasters;
 }

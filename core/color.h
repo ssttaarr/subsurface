@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #ifndef COLOR_H
 #define COLOR_H
 
@@ -5,8 +6,6 @@
    from http://chir.ag/projects/name-that-color */
 
 #include <QColor>
-#include <QMap>
-#include <QVector>
 
 // Greens
 #define CAMARONE1 QColor::fromRgbF(0.0, 0.4, 0.0, 1)
@@ -28,6 +27,7 @@
 #define PERSIANRED1 QColor::fromRgbF(0.8, 0.2, 0.2, 1)
 #define TUSCANY1 QColor::fromRgbF(0.8, 0.4, 0.2, 1)
 #define PIRATEGOLD1 QColor::fromRgbF(0.8, 0.5, 0.0, 1)
+#define PIRATEGOLD1_MED_TRANS QColor::fromRgbF(0.8, 0.5, 0.0, 0.75)
 #define HOKEYPOKEY1 QColor::fromRgbF(0.8, 0.6, 0.2, 1)
 #define CINNABAR1 QColor::fromRgbF(0.9, 0.3, 0.2, 1)
 #define REDORANGE1 QColor::fromRgbF(1.0, 0.2, 0.2, 1)
@@ -101,6 +101,7 @@ typedef enum {
 	CCRSENSOR1,
 	CCRSENSOR2,
 	CCRSENSOR3,
+	SCR_OCPO2,
 	PP_LINES,
 
 	/* Other colors */
@@ -135,18 +136,10 @@ typedef enum {
 	TISSUE_PERCENTAGE,
 	GF_LINE,
 	AMB_PRESSURE_LINE
-} color_indice_t;
+} color_index_t;
 
-extern QMap<color_indice_t, QVector<QColor> > profile_color;
-void fill_profile_color();
-QColor getColor(const color_indice_t i, bool isGrayscale = false);
+QColor getColor(const color_index_t i, bool isGrayscale = false);
 QColor getSacColor(int sac, int diveSac);
-struct text_render_options {
-	double size;
-	color_indice_t color;
-	double hpos, vpos;
-};
-
-typedef text_render_options text_render_options_t;
+QColor getPressureColor(double density);
 
 #endif // COLOR_H

@@ -1,9 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0
 #ifndef DIVEPLOTDATAMODEL_H
 #define DIVEPLOTDATAMODEL_H
 
 #include <QAbstractTableModel>
 
 #include "core/display.h"
+#include "core/dive.h"
 
 struct dive;
 struct plot_data;
@@ -19,7 +21,6 @@ public:
 		TEMPERATURE,
 		USERENTERED,
 		COLOR,
-		CYLINDERINDEX,
 		SENSOR_PRESSURE,
 		INTERPOLATED_PRESSURE,
 		SAC,
@@ -63,6 +64,7 @@ public:
 		CCRSENSOR1,
 		CCRSENSOR2,
 		CCRSENSOR3,
+		SCR_OC_PO2,
 		HEARTBEAT,
 		AMBPRESSURE,
 		GFLINE,
@@ -81,7 +83,6 @@ public:
 	double pheMax();
 	double pn2Max();
 	double po2Max();
-	double CCRMax();
 	void emitDataChanged();
 #ifndef SUBSURFACE_MOBILE
 	void calculateDecompression();
@@ -91,6 +92,7 @@ private:
 	struct plot_info pInfo;
 	int diveId;
 	unsigned int dcNr;
+	struct deco_state plot_deco_state;
 };
 
 #endif // DIVEPLOTDATAMODEL_H

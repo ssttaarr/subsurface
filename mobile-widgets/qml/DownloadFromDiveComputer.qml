@@ -1,11 +1,11 @@
-import QtQuick 2.3
-import QtQuick.Controls 1.2
-import QtQuick.Controls.Styles 1.2
+// SPDX-License-Identifier: GPL-2.0
+import QtQuick 2.6
+import QtQuick.Controls 2.2 as Controls
 import QtQuick.Window 2.2
 import QtQuick.Dialogs 1.2
-import QtQuick.Layouts 1.1
+import QtQuick.Layouts 1.3
 import org.subsurfacedivelog.mobile 1.0
-import org.kde.kirigami 1.0 as Kirigami
+import org.kde.kirigami 2.2 as Kirigami
 
 Kirigami.Page {
 	id: diveComputerDownloadWindow
@@ -14,111 +14,282 @@ Kirigami.Page {
 	height: parent.height
 	Layout.fillWidth: true;
 	title: qsTr("Dive Computer")
+	background: Rectangle { color: subsurfaceTheme.backgroundColor }
 
-/* this can be done by hitting the back key
-	contextualActions: [
-		Action {
-			text: qsTr("Close Preferences")
-			iconName: "dialog-cancel"
-			onTriggered: {
-				stackView.pop()
-				contextDrawer.close()
+	property alias dcImportModel: importModel
+	property bool divesDownloaded: false
+	property bool btEnabled: manager.btEnabled
+	property string btMessage: manager.btEnabled ? "" : qsTr("Bluetooth is not enabled")
+
+	DCDownloadThread {
+		id: downloadThread
+
+		onFinished : {
+			importModel.repopulate()
+			progressBar.visible = false
+			if (dcImportModel.rowCount() > 0) {
+				console.log(dcImportModel.rowCount() + " dive downloaded")
+				divesDownloaded = true
+			} else {
+				console.log("no new dives downloaded")
+				divesDownloaded = false
 			}
+			manager.appendTextToLog("DCDownloadThread finished")
 		}
-	]
- */
+	}
+
+	DCImportModel {
+		id: importModel
+	}
+
 	ColumnLayout {
 		anchors.top: parent.top
 		height: parent.height
 		width: parent.width
 		Layout.fillWidth: true
-		RowLayout {
-			anchors.top:parent.top
+		GridLayout {
+			id: buttonGrid
+			Layout.alignment: Qt.AlignTop
+			Layout.topMargin: Kirigami.Units.smallSpacing * 4
+			columns: 2
+			Controls.Label { text: qsTr(" Vendor name: ") }
+			Controls.ComboBox {
+				id: comboVendor
+				Layout.fillWidth: true
+				model: vendorList
+				currentIndex: -1
+				delegate: Controls.ItemDelegate {
+					width: comboVendor.width
+					contentItem: Text {
+						text: modelData
+						font.pointSize: subsurfaceTheme.regularPointSize
+						verticalAlignment: Text.AlignVCenter
+						elide: Text.ElideRight
+					}
+					highlighted: comboVendor.highlightedIndex === index
+				}
+				contentItem: Text {
+					text: comboVendor.displayText
+					font.pointSize: subsurfaceTheme.regularPointSize
+					leftPadding: Kirigami.Units.gridUnit * 0.5
+					horizontalAlignment: Text.AlignLeft
+					verticalAlignment: Text.AlignVCenter
+					elide: Text.ElideRight
+				}
+				onCurrentTextChanged: {
+					manager.DC_vendor = currentText
+					comboProduct.model = manager.getProductListFromVendor(currentText)
+					if (currentIndex == manager.getDetectedVendorIndex())
+						comboProduct.currentIndex = manager.getDetectedProductIndex(currentText)
+				}
+			}
+			Controls.Label { text: qsTr(" Dive Computer:") }
+			Controls.ComboBox {
+				id: comboProduct
+				Layout.fillWidth: true
+				model: null
+				currentIndex: -1
+				delegate: Controls.ItemDelegate {
+					width: comboProduct.width
+					contentItem: Text {
+						text: modelData
+						font.pointSize: subsurfaceTheme.regularPointSize
+						verticalAlignment: Text.AlignVCenter
+						elide: Text.ElideRight
+					}
+					highlighted: comboProduct.highlightedIndex === index
+				}
+				contentItem: Text {
+					text: comboProduct.displayText
+					font.pointSize: subsurfaceTheme.regularPointSize
+					leftPadding: Kirigami.Units.gridUnit * 0.5
+					horizontalAlignment: Text.AlignLeft
+					verticalAlignment: Text.AlignVCenter
+					elide: Text.ElideRight
+				}
+				onCurrentTextChanged: {
+					manager.DC_product = currentText
+					var newIdx = manager.getMatchingAddress(comboVendor.currentText, currentText)
+					if (newIdx != -1)
+						comboConnection.currentIndex = newIdx
+				}
+
+				onModelChanged: {
+					currentIndex = manager.getDetectedProductIndex(comboVendor.currentText)
+				}
+			}
+			Controls.Label { text: qsTr(" Connection:") }
+			Controls.ComboBox {
+				id: comboConnection
+				Layout.fillWidth: true
+				model: connectionListModel
+				currentIndex: -1
+				delegate: Controls.ItemDelegate {
+					width: comboConnection.width
+					contentItem: Text {
+						text: modelData
+						// color: "#21be2b"
+						font.pointSize: subsurfaceTheme.smallPointSize
+						verticalAlignment: Text.AlignVCenter
+						elide: Text.ElideRight
+					}
+					highlighted: comboConnection.highlightedIndex === index
+				}
+				contentItem: Text {
+					text: comboConnection.displayText
+					font.pointSize: subsurfaceTheme.smallPointSize
+					leftPadding: Kirigami.Units.gridUnit * 0.5
+					horizontalAlignment: Text.AlignLeft
+					verticalAlignment: Text.AlignVCenter
+					elide: Text.ElideRight
+				}
+				onCurrentTextChanged: {
+					// pattern that matches BT addresses
+					var btAddr = /[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]:[0-9A-Fa-f][0-9A-Fa-f]/ ;
+
+					// On iOS we store UUID instead of device address.
+					if (Qt.platform.os === 'ios')
+						btAddr = /\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}/;
+
+					if (btAddr.test(currentText))
+						manager.DC_bluetoothMode = true
+					else
+						manager.DC_bluetoothMode = false
+					manager.DC_devName = comboConnection.currentText
+				}
+			}
+		}
+
+		Controls.ProgressBar {
+			id: progressBar
+			Layout.topMargin: Kirigami.Units.smallSpacing * 4
 			Layout.fillWidth: true
-			Text { text: qsTr(" Vendor name : ") }
-			ComboBox { Layout.fillWidth: true }
+			indeterminate: true
+			visible: false
 		}
+
 		RowLayout {
-			Text { text: qsTr(" Dive Computer:") }
-			ComboBox { Layout.fillWidth: true }
-		}
-		RowLayout {
-			Text { text: " Progress:" }
+			id: buttonBar
 			Layout.fillWidth: true
-			ProgressBar { Layout.fillWidth: true }
-		}
-		RowLayout {
-			SubsurfaceButton {
+			Layout.topMargin: Kirigami.Units.smallSpacing * 2
+			spacing: Kirigami.Units.smallSpacing
+			SsrfButton {
+				id: download
 				text: qsTr("Download")
 				onClicked: {
-					text: qsTr("Retry")
-					stackView.pop();
+					text = qsTr("Retry")
+					// strip any BT Name from the address
+					var devName = manager.DC_devName
+					manager.DC_devName = devName.replace(/^(.*) /, "")
+					manager.appendTextToLog("DCDownloadThread started for " + manager.DC_vendor + " " + manager.DC_product + " on "+ manager.DC_devName)
+					progressBar.visible = true
+					downloadThread.start()
 				}
 			}
-			SubsurfaceButton {
+			SsrfButton {
 				id:quitbutton
-				text: qsTr("Quit")
+				text: progressBar.visible ? qsTr("Cancel") : qsTr("Quit")
 				onClicked: {
-					stackView.pop();
+					manager.cancelDownloadDC()
+					if (!progressBar.visible) {
+						stackView.pop();
+						download.text = qsTr("Download")
+						divesDownloaded = false
+						manager.progressMessage = ""
+					}
+					manager.appendTextToLog("exit DCDownload screen")
+				}
+			}
+			SsrfButton {
+				id:rescanbutton
+				text: qsTr("Rescan")
+				onClicked: {
+					manager.btRescan()
+				}
+			}
+
+			Controls.Label {
+				Layout.fillWidth: true
+				text: divesDownloaded ? qsTr(" Downloaded dives") :
+							(manager.progressMessage != "" ? qsTr("Info:") + " " + manager.progressMessage : btMessage)
+				wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+			}
+		}
+
+		ListView {
+			id: dlList
+			Layout.topMargin: Kirigami.Units.smallSpacing * 4
+			Layout.bottomMargin: bottomButtons.height * 1.5
+			Layout.fillWidth: true
+			Layout.fillHeight: true
+
+			model : importModel
+			delegate : DownloadedDiveDelegate {
+				id: delegate
+				datetime: model.datetime ? model.datetime : ""
+				duration: model.duration ? model.duration : ""
+				depth: model.depth ? model.depth : ""
+				selected: model.selected ? model.selected : false
+
+				onClicked : {
+					console.log("Selecting index" + index);
+					importModel.selectRow(index)
 				}
 			}
 		}
+
 		RowLayout {
-			Text {
-				text: qsTr(" Downloaded dives")
-			}
-		}
-		TableView {
-			width: parent.width
-			Layout.fillWidth: true  // The tableview should fill
-			Layout.fillHeight: true // all remaining vertical space
-			height: parent.height   // on this screen
-			TableViewColumn {
-				width: parent.width / 2
-				role: "datetime"
-				title: qsTr("Date / Time")
-			}
-			TableViewColumn {
-				width: parent.width / 4
-				role: "duration"
-				title: qsTr("Duration")
-			}
-			TableViewColumn {
-				width: parent.width / 4
-				role: "depth"
-				title: qsTr("Depth")
-			}
-			}
-		RowLayout {
+			id: bottomButtons
 			Layout.fillWidth: true
-			SubsurfaceButton {
+			Controls.Label {
+				text: ""  // Spacer on the left for hamburger menu
+				Layout.fillWidth: true
+			}
+			SsrfButton {
+				id: acceptButton
+				enabled: divesDownloaded
 				text: qsTr("Accept")
 				onClicked: {
-				stackView.pop();
-				}
-			}
-			SubsurfaceButton {
-				text: qsTr("Quit")
-				onClicked: {
+					manager.appendTextToLog("Save downloaded dives that were selected")
+					importModel.recordDives()
+					manager.saveChangesLocal()
+					diveModel.clear()
+					diveModel.addAllDives()
 					stackView.pop();
+					download.text = qsTr("Download")
+					divesDownloaded = false
 				}
 			}
-			Text {
+			Controls.Label {
 				text: ""  // Spacer between 2 button groups
 				Layout.fillWidth: true
 			}
-			SubsurfaceButton {
+			SsrfButton {
+				id: select
+				enabled: divesDownloaded
 				text: qsTr("Select All")
+				onClicked : {
+					importModel.selectAll()
+				}
 			}
-			SubsurfaceButton {
-				id: unselectbutton
+			SsrfButton {
+				id: unselect
+				enabled: divesDownloaded
 				text: qsTr("Unselect All")
+				onClicked : {
+					importModel.selectNone()
+				}
 			}
 		}
-		RowLayout { // spacer to make space for silly button
-			Layout.minimumHeight: 1.2 * unselectbutton.height
-			Text {
-				text:""
+
+		onVisibleChanged: {
+			if (visible) {
+				comboVendor.currentIndex = manager.getDetectedVendorIndex()
+				comboProduct.currentIndex = manager.getDetectedProductIndex(comboVendor.currentText)
+				comboConnection.currentIndex = manager.getMatchingAddress(comboVendor.currentText, comboProduct.currentText)
+				manager.DC_vendor = comboVendor.currentText
+				manager.DC_product = comboProduct.currentText
+				manager.DC_devName = comboConnection.currentText
 			}
 		}
 	}

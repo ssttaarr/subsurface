@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #ifndef CYLINDERMODEL_H
 #define CYLINDERMODEL_H
 
@@ -38,8 +39,11 @@ public:
 	void updateDive();
 	void copyFromDive(struct dive *d);
 	void updateDecoDepths(pressure_t olddecopo2);
+	void updateTrashIcon();
+	void moveAtFirst(int cylid);
 	cylinder_t *cylinderAt(const QModelIndex &index);
 	bool changed;
+	virtual QVariant headerData(int section, Qt::Orientation orientation, int role) const;
 
 public
 slots:

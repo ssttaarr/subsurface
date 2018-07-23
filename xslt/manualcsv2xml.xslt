@@ -26,6 +26,8 @@
   <xsl:param name="cylindersizeField" select="cylindersizeField"/>
   <xsl:param name="startpressureField" select="startpressureField"/>
   <xsl:param name="endpressureField" select="endpressureField"/>
+  <xsl:param name="visibilityField" select="visibilityField"/>
+  <xsl:param name="ratingField" select="ratingField"/>
   <xsl:param name="o2Field" select="o2Field"/>
   <xsl:param name="heField" select="heField"/>
   <xsl:output method="xml" encoding="utf-8" indent="yes"/>
@@ -205,6 +207,24 @@
         </xsl:attribute>
       </xsl:if>
 
+      <xsl:if test="$visibilityField >= 0">
+        <xsl:attribute name="visibility">
+          <xsl:call-template name="getFieldByIndex">
+            <xsl:with-param name="index" select="$visibilityField"/>
+            <xsl:with-param name="line" select="$line"/>
+          </xsl:call-template>
+        </xsl:attribute>
+      </xsl:if>
+
+      <xsl:if test="$ratingField >= 0">
+        <xsl:attribute name="rating">
+          <xsl:call-template name="getFieldByIndex">
+            <xsl:with-param name="index" select="$ratingField"/>
+            <xsl:with-param name="line" select="$line"/>
+          </xsl:call-template>
+        </xsl:attribute>
+      </xsl:if>
+
       <divecomputer deviceid="ffffffff" model="csv" />
 
       <xsl:if test="$locationField &gt;= 0 or $gpsField &gt;= 0">
@@ -241,7 +261,7 @@
                   <xsl:value-of select="$air"/>
                 </xsl:when>
                 <xsl:otherwise>
-                  <xsl:value-of select="(translate(translate($air, translate($air, '1234567890,.', ''), ''), ',', '.') - 32) * 5 div 9"/>
+                  <xsl:value-of select="format-number((translate(translate($air, translate($air, '1234567890,.', ''), ''), ',', '.') - 32) * 5 div 9, '#.#')"/>
                 </xsl:otherwise>
               </xsl:choose>
             </xsl:attribute>
@@ -259,7 +279,7 @@
                   <xsl:value-of select="$water"/>
                 </xsl:when>
                 <xsl:otherwise>
-                  <xsl:value-of select="(translate(translate($water, translate($water, '1234567890,.', ''), ''), ',', '.') - 32) * 5 div 9"/>
+                  <xsl:value-of select="format-number((translate(translate($water, translate($water, '1234567890,.', ''), ''), ',', '.') - 32) * 5 div 9, '#.#')"/>
                 </xsl:otherwise>
               </xsl:choose>
             </xsl:attribute>
@@ -282,7 +302,7 @@
                   <xsl:value-of select="$size"/>
                 </xsl:when>
                 <xsl:otherwise>
-                  <xsl:value-of select="format-number((translate($size, translate($size, '0123456789', ''), '') * 14.7 div 3000) div 0.035315, '#.#')"/>
+                  <xsl:value-of select="format-number((translate($size, translate($size, '0123456789.,', ''), '') * 14.7 div 3000) div 0.035315, '#.#')"/>
                 </xsl:otherwise>
               </xsl:choose>
             </xsl:attribute>
@@ -300,7 +320,7 @@
                   <xsl:value-of select="$start"/>
                 </xsl:when>
                 <xsl:otherwise>
-                  <xsl:value-of select="format-number($start div 14.5037738, '#.###')"/>
+                  <xsl:value-of select="format-number(translate($start, translate($start, '0123456789.,', ''), '') div 14.5037738, '#.#')"/>
                 </xsl:otherwise>
               </xsl:choose>
             </xsl:attribute>
@@ -318,7 +338,7 @@
                   <xsl:value-of select="$end"/>
                 </xsl:when>
                 <xsl:otherwise>
-                  <xsl:value-of select="format-number($end div 14.5037738, '#.###')"/>
+                  <xsl:value-of select="format-number(translate($end, translate($end, '0123456789.,', ''), '') div 14.5037738, '#.#')"/>
                 </xsl:otherwise>
               </xsl:choose>
             </xsl:attribute>
@@ -357,7 +377,7 @@
                   <xsl:value-of select="translate($maxDepth, translate($maxDepth, '1234567890,.', ''), '')"/>
                 </xsl:when>
                 <xsl:otherwise>
-                  <xsl:value-of select="translate(translate($maxDepth, translate($maxDepth, '1234567890,.', ''), ''), ',', '.') * 0.3048"/>
+                  <xsl:value-of select="format-number(translate(translate($maxDepth, translate($maxDepth, '1234567890,.', ''), ''), ',', '.') * 0.3048, '#.##')"/>
                 </xsl:otherwise>
               </xsl:choose>
             </xsl:attribute>
@@ -375,7 +395,7 @@
                   <xsl:value-of select="translate($meanDepth, translate($meanDepth, '1234567890,.', ''), '')"/>
                 </xsl:when>
                 <xsl:otherwise>
-                  <xsl:value-of select="translate(translate($meanDepth, translate($meanDepth, '1234567890,.', ''), ''), ',', '.') * 0.3048"/>
+                  <xsl:value-of select="format-number(translate(translate($meanDepth, translate($meanDepth, '1234567890,.', ''), ''), ',', '.') * 0.3048, '#.##')"/>
                 </xsl:otherwise>
               </xsl:choose>
             </xsl:attribute>
@@ -411,38 +431,62 @@
       </xsl:if>
 
       <xsl:if test="$notesField >= 0">
-        <notes>
+        <xsl:variable name="note">
           <xsl:call-template name="getFieldByIndex">
             <xsl:with-param name="index" select="$notesField"/>
             <xsl:with-param name="line" select="$line"/>
             <xsl:with-param name="remaining" select="$remaining"/>
           </xsl:call-template>
+        </xsl:variable>
+        <notes>
+          <xsl:call-template name="new-line">
+            <xsl:with-param name="str" select="$note" />
+          </xsl:call-template>
         </notes>
       </xsl:if>
 
       <xsl:if test="$weightField >= 0">
-        <weightsystem description="imported">
-          <xsl:attribute name="weight">
-            <xsl:variable name="weight">
-              <xsl:call-template name="getFieldByIndex">
-                <xsl:with-param name="index" select="$weightField"/>
-                <xsl:with-param name="line" select="$line"/>
-              </xsl:call-template>
-            </xsl:variable>
-            <xsl:choose>
-              <xsl:when test="$units = 0">
-                <xsl:value-of select="translate($weight, translate($weight, '1234567890,.', ''), '')"/>
-              </xsl:when>
-              <xsl:otherwise>
-                <xsl:value-of select="translate(translate($weight, translate($weight, '1234567890,.', ''), ''), ',', '.') div 2.2046"/>
-              </xsl:otherwise>
-            </xsl:choose>
-          </xsl:attribute>
-        </weightsystem>
+        <xsl:variable name="weight">
+          <xsl:call-template name="getFieldByIndex">
+            <xsl:with-param name="index" select="$weightField"/>
+            <xsl:with-param name="line" select="$line"/>
+          </xsl:call-template>
+        </xsl:variable>
+
+        <xsl:if test="translate($weight, translate($weight, '1234567890,.', ''), '') > 0">
+          <weightsystem description="imported">
+            <xsl:attribute name="weight">
+              <xsl:choose>
+                <xsl:when test="$units = 0">
+                  <xsl:value-of select="translate($weight, translate($weight, '1234567890,.', ''), '')"/>
+                </xsl:when>
+                <xsl:otherwise>
+                  <xsl:value-of select="translate(translate($weight, translate($weight, '1234567890,.', ''), ''), ',', '.') div 2.2046"/>
+                </xsl:otherwise>
+              </xsl:choose>
+            </xsl:attribute>
+          </weightsystem>
+        </xsl:if>
       </xsl:if>
 
     </dive>
   </xsl:if>
+  </xsl:template>
+
+  <xsl:template name="new-line">
+    <xsl:param name="str"/>
+    <xsl:choose>
+      <xsl:when test="contains($str, '\n')">
+        <xsl:value-of select="substring-before($str, '\n')"/>
+        <xsl:value-of select="$lf"/>
+        <xsl:call-template name="new-line">
+          <xsl:with-param name="str" select="substring-after($str, '\n')"/>
+        </xsl:call-template>
+      </xsl:when>
+      <xsl:otherwise>
+          <xsl:value-of select="$str"/>
+      </xsl:otherwise>
+    </xsl:choose>
   </xsl:template>
 
 </xsl:stylesheet>

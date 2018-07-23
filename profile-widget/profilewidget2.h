@@ -1,7 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
 #ifndef PROFILEWIDGET2_H
 #define PROFILEWIDGET2_H
 
 #include <QGraphicsView>
+#include <vector>
+#include <memory>
 
 // /* The idea of this widget is to display and edit the profile.
 //  * It has:
@@ -16,12 +19,13 @@
 #include "profile-widget/divelineitem.h"
 #include "profile-widget/diveprofileitem.h"
 #include "core/display.h"
+#include "core/color.h"
+#include "core/units.h"
 
 class RulerItem2;
 struct dive;
 struct plot_info;
 class ToolTipItem;
-class DiveMeanDepth;
 class DiveReportedCeiling;
 class DiveTextItem;
 class TemperatureAxis;
@@ -35,7 +39,6 @@ class DiveProfileItem;
 class TimeAxis;
 class DiveTemperatureItem;
 class DiveHeartrateItem;
-class PercentageItem;
 class DiveGasPressureItem;
 class DiveCalculatedCeiling;
 class DiveCalculatedTissue;
@@ -71,13 +74,12 @@ public:
 
 	ProfileWidget2(QWidget *parent = 0);
 	void resetZoom();
-	void plotDive(struct dive *d = 0, bool force = false);
-	void setupItem(AbstractProfilePolygonItem *item, DiveCartesianAxis *hAxis, DiveCartesianAxis *vAxis, DivePlotDataModel *model, int vData, int hData, int zValue);
+	void plotDive(struct dive *d = 0, bool force = false, bool clearPictures = false);
+	void setupItem(AbstractProfilePolygonItem *item, DiveCartesianAxis *vAxis, int vData, int hData, int zValue);
 	void setPrintMode(bool mode, bool grayscale = false);
 	bool getPrintMode();
 	bool isPointOutOfBoundaries(const QPointF &point) const;
 	bool isPlanner();
-	bool isAddOrPlanner();
 	double getFontPrintScale();
 	void setFontPrintScale(double scale);
 #ifndef SUBSURFACE_MOBILE
@@ -91,7 +93,6 @@ public:
 signals:
 	void fontPrintScaleChanged(double scale);
 	void enableToolbar(bool enable);
-	void showError();
 	void enableShortcuts();
 	void disableShortcuts(bool paste);
 	void refreshDisplay(bool recreateDivelist);
@@ -106,15 +107,18 @@ slots: // Necessary to call from QAction's signals.
 	void actionRequestedReplot(bool triggered);
 	void setEmptyState();
 	void setProfileState();
-	void plotPictures();
 	void setReplot(bool state);
 	void replot(dive *d = 0);
 #ifndef SUBSURFACE_MOBILE
+	void plotPictures();
+	void removePictures(const QVector<QString> &fileUrls);
 	void setPlanState();
 	void setAddState();
 	void changeGas();
 	void addSetpointChange();
+	void splitDive();
 	void addBookmark();
+	void addDivemodeSwitch();
 	void hideEvents();
 	void unhideEvents();
 	void removeEvent();
@@ -123,6 +127,7 @@ slots: // Necessary to call from QAction's signals.
 	void deleteCurrentDC();
 	void pointInserted(const QModelIndex &parent, int start, int end);
 	void pointsRemoved(const QModelIndex &, int start, int end);
+	void updateThumbnail(QString filename, QImage thumbnail);
 
 	/* this is called for every move on the handlers. maybe we can speed up this a bit? */
 	void recreatePlannedDive();
@@ -140,7 +145,6 @@ slots: // Necessary to call from QAction's signals.
 #endif
 
 protected:
-	virtual ~ProfileWidget2();
 	void resizeEvent(QResizeEvent *event) Q_DECL_OVERRIDE;
 #ifndef SUBSURFACE_MOBILE
 	void wheelEvent(QWheelEvent *event) Q_DECL_OVERRIDE;
@@ -164,7 +168,10 @@ private: /*methods*/
 	void setupItemOnScene();
 	void disconnectTemporaryConnections();
 	struct plot_data *getEntryFromPos(QPointF pos);
-
+	void addActionShortcut(const Qt::Key shortcut, void (ProfileWidget2::*slot)());
+	void createPPGas(PartialPressureGasItem *item, int verticalColumn, color_index_t color, color_index_t colorAlert,
+			 double *thresholdSettingsMin, double *thresholdSettingsMax);
+	void clearPictures();
 private:
 	DivePlotDataModel *dataModel;
 	int zoomLevel;
@@ -192,10 +199,6 @@ private:
 	QList<DiveEventItem *> eventItems;
 	DiveTextItem *diveComputerText;
 	DiveReportedCeiling *reportedCeiling;
-#ifndef SUBSURFACE_MOBILE
-	DiveCalculatedCeiling *diveCeiling;
-	DiveTextItem *decoModelParameters;
-	QList<DiveCalculatedTissue *> allTissues;
 	PartialPressureGasItem *pn2GasItem;
 	PartialPressureGasItem *pheGasItem;
 	PartialPressureGasItem *po2GasItem;
@@ -203,6 +206,11 @@ private:
 	PartialPressureGasItem *ccrsensor1GasItem;
 	PartialPressureGasItem *ccrsensor2GasItem;
 	PartialPressureGasItem *ccrsensor3GasItem;
+	PartialPressureGasItem *ocpo2GasItem;
+#ifndef SUBSURFACE_MOBILE
+	DiveCalculatedCeiling *diveCeiling;
+	DiveTextItem *decoModelParameters;
+	QList<DiveCalculatedTissue *> allTissues;
 	DiveCartesianAxis *heartBeatAxis;
 	DiveHeartrateItem *heartBeatItem;
 	DiveCartesianAxis *percentageAxis;
@@ -218,10 +226,23 @@ private:
 	bool printMode;
 
 	QList<QGraphicsSimpleTextItem *> gases;
-	QList<DivePictureItem *> pictures;
 
 	//specifics for ADD and PLAN
 #ifndef SUBSURFACE_MOBILE
+	// The list of pictures in this plot. The pictures are sorted by offset in seconds.
+	// For the same offset, sort by filename.
+	// Pictures that are outside of the dive time are not shown.
+	struct PictureEntry {
+		offset_t offset;
+		QString filename;
+		std::unique_ptr<DivePictureItem> thumbnail;
+		PictureEntry (offset_t offsetIn, const QString &filenameIn, QGraphicsScene *scene);
+		bool operator< (const PictureEntry &e) const;
+	};
+	void updateThumbnailXPos(PictureEntry &e);
+	std::vector<PictureEntry> pictures;
+	void calculatePictureYPositions();
+
 	QList<DiveHandler *> handles;
 	void repositionDiveHandlers();
 	int fixHandlerIndex(DiveHandler *activeHandler);

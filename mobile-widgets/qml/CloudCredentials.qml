@@ -1,28 +1,29 @@
-import QtQuick 2.3
-import QtQuick.Controls 1.2
+// SPDX-License-Identifier: GPL-2.0
+import QtQuick 2.6
+import QtQuick.Controls 2.2 as Controls
 import QtQuick.Window 2.2
 import QtQuick.Dialogs 1.2
-import QtQuick.Layouts 1.1
-import org.kde.kirigami 1.0 as Kirigami
+import QtQuick.Layouts 1.2
+import org.kde.kirigami 2.2 as Kirigami
 import org.subsurfacedivelog.mobile 1.0
 
 Item {
 	id: loginWindow
-	height: outerLayout.height + 2 * Kirigami.Units.gridUnit
+	height: outerLayout.height
 
 	property string username: login.text;
 	property string password: password.text;
 
 	function saveCredentials() {
-		manager.cloudUserName = login.text
-		manager.cloudPassword = password.text
-		manager.cloudPin = pin.text
+		prefs.cloudUserName = login.text
+		prefs.cloudPassword = password.text
+		prefs.cloudPin = pin.text
 		manager.saveCloudCredentials()
 	}
 
 	ColumnLayout {
 		id: outerLayout
-		width: loginWindow.width - loginWindow.leftPadding - loginWindow.rightPadding - 2 * Kirigami.Units.gridUnit
+		width: loginWindow.width - Kirigami.Units.gridUnit // to ensure the full input fields are visible
 
 		function goToNext() {
 			for (var i = 0; i < children.length; ++i)
@@ -37,11 +38,9 @@ Item {
 
 		onVisibleChanged: {
 			if (visible && manager.accessingCloud < 0) {
-				manager.appendTextToLog("Credential scrn: show kbd was: " + (Qt.inputMethod.isVisible ? "visible" : "invisible"))
 				Qt.inputMethod.show()
 				login.forceActiveFocus()
 			} else {
-				manager.appendTextToLog("Credential scrn: hide kbd was: " + (Qt.inputMethod.isVisible ? "visible" : "invisible"))
 				Qt.inputMethod.hide()
 			}
 		}
@@ -52,58 +51,104 @@ Item {
 			Layout.bottomMargin: Kirigami.Units.largeSpacing / 2
 		}
 
-		Kirigami.Label {
+		Controls.Label {
 			text: qsTr("Email")
+			visible: !rootItem.showPin
+			font.pointSize: subsurfaceTheme.smallPointSize
+			color: subsurfaceTheme.secondaryTextColor
 		}
 
-		StyledTextField {
+		Controls.TextField {
 			id: login
-			text: manager.cloudUserName
+			text: prefs.cloudUserName
+			visible: !rootItem.showPin
 			Layout.fillWidth: true
 			inputMethodHints: Qt.ImhEmailCharactersOnly |
 					  Qt.ImhNoAutoUppercase
 		}
 
-		Kirigami.Label {
+		Controls.Label {
 			text: qsTr("Password")
+			visible: !rootItem.showPin
+			font.pointSize: subsurfaceTheme.smallPointSize
+			color: subsurfaceTheme.secondaryTextColor
 		}
 
-		StyledTextField {
+		Controls.TextField {
 			id: password
-			text: manager.cloudPassword
-			echoMode: TextInput.Password
+			text: prefs.cloudPassword
+			visible: !rootItem.showPin
+			echoMode: TextInput.PasswordEchoOnEdit
 			inputMethodHints: Qt.ImhSensitiveData |
 					  Qt.ImhHiddenText |
 					  Qt.ImhNoAutoUppercase
 			Layout.fillWidth: true
 		}
 
-		GridLayout {
-			columns: 2
-
-			CheckBox {
-				checked: false
-				id: showPassword
-				onCheckedChanged: {
-					password.echoMode = checked ? TextInput.Normal : TextInput.Password
-				}
-			}
-			Kirigami.Label {
-				text: qsTr("Show password")
-			}
-		}
-
-		Kirigami.Label {
+		Controls.Label {
 			text: qsTr("PIN")
 			visible: rootItem.showPin
 		}
-		StyledTextField {
+		Controls.TextField {
 			id: pin
 			text: ""
 			Layout.fillWidth: true
 			visible: rootItem.showPin
 		}
 
-		Item { width: Kirigami.Units.gridUnit; height: width }
+		RowLayout {
+			Layout.fillWidth: true
+			Layout.margins: Kirigami.Units.smallSpacing
+			spacing: Kirigami.Units.smallSpacing
+			visible: rootItem.showPin
+			SsrfButton {
+				id: registerpin
+				text: qsTr("Register") 
+				onClicked: {
+					saveCredentials()
+				}
+			}
+			Controls.Label {
+				text: ""  // Spacer between 2 button groups
+				Layout.fillWidth: true
+			}
+			SsrfButton {
+				id: cancelpin
+				text: qsTr("Cancel")
+				onClicked: {
+					prefs.cancelCredentialsPinSetup()
+					rootItem.returnTopPage()
+				}
+			}
+		}
+
+		RowLayout {
+			Layout.fillWidth: true
+			Layout.margins: Kirigami.Units.smallSpacing
+			spacing: Kirigami.Units.smallSpacing
+			visible: !rootItem.showPin
+
+			SsrfButton {
+				id: signin_register_normal
+				text: qsTr("Sign-in or Register")
+				onClicked: {
+					saveCredentials()
+				}
+			}
+			Controls.Label {
+				text: ""  // Spacer between 2 button groups
+				Layout.fillWidth: true
+			}
+			SsrfButton {
+				id: toNoCloudMode
+				text: qsTr("No cloud mode")
+				onClicked: {
+					manager.syncToCloud = false
+					prefs.credentialStatus = SsrfPrefs.CS_NOCLOUD
+					manager.saveCloudCredentials()
+					manager.openNoCloudRepo()
+				}
+			}
+		}
 	}
 }

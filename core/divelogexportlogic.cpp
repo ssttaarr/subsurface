@@ -1,10 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <QString>
 #include <QFile>
 #include <QFileInfo>
 #include <QDir>
 #include <QTextStream>
 #include "divelogexportlogic.h"
-#include "helpers.h"
+#include "qthelper.h"
 #include "units.h"
 #include "statistics.h"
 #include "save-html.h"
@@ -51,7 +52,8 @@ static void exportHTMLstatisticsTotal(QTextStream &out, stats_t *total_stats)
 	out << "{";
 	out << "\"YEAR\":\"Total\",";
 	out << "\"DIVES\":\"" << total_stats->selection_size << "\",";
-	out << "\"TOTAL_TIME\":\"" << get_time_string(total_stats->total_time.seconds, 0) << "\",";
+	out << "\"TOTAL_TIME\":\"" << get_dive_duration_string(total_stats->total_time.seconds,
+									gettextFromC::tr("h"), gettextFromC::tr("min"), gettextFromC::tr("sec"), " ") << "\",";
 	out << "\"AVERAGE_TIME\":\"--\",";
 	out << "\"SHORTEST_TIME\":\"--\",";
 	out << "\"LONGEST_TIME\":\"--\",";
@@ -86,7 +88,8 @@ static void exportHTMLstatistics(const QString filename, struct htmlExportSettin
 			out << "{";
 			out << "\"YEAR\":\"" << stats_yearly[i].period << "\",";
 			out << "\"DIVES\":\"" << stats_yearly[i].selection_size << "\",";
-			out << "\"TOTAL_TIME\":\"" << get_time_string(stats_yearly[i].total_time.seconds, 0) << "\",";
+			out << "\"TOTAL_TIME\":\"" << get_dive_duration_string(stats_yearly[i].total_time.seconds,
+											gettextFromC::tr("h"), gettextFromC::tr("min"), gettextFromC::tr("sec"), " ") << "\",";
 			out << "\"AVERAGE_TIME\":\"" << get_minutes(stats_yearly[i].total_time.seconds / stats_yearly[i].selection_size) << "\",";
 			out << "\"SHORTEST_TIME\":\"" << get_minutes(stats_yearly[i].shortest_time.seconds) << "\",";
 			out << "\"LONGEST_TIME\":\"" << get_minutes(stats_yearly[i].longest_time.seconds) << "\",";
@@ -96,12 +99,15 @@ static void exportHTMLstatistics(const QString filename, struct htmlExportSettin
 			out << "\"AVG_SAC\":\"" << get_volume_string(stats_yearly[i].avg_sac) << "\",";
 			out << "\"MIN_SAC\":\"" << get_volume_string(stats_yearly[i].min_sac) << "\",";
 			out << "\"MAX_SAC\":\"" << get_volume_string(stats_yearly[i].max_sac) << "\",";
-			if ( stats_yearly[i].combined_count )
-				out << "\"AVG_TEMP\":\"" << QString::number(stats_yearly[i].combined_temp / stats_yearly[i].combined_count, 'f', 1) << "\",";
-			else
+			if (stats_yearly[i].combined_count) {
+				temperature_t avg_temp;
+				avg_temp.mkelvin = stats_yearly[i].combined_temp.mkelvin / stats_yearly[i].combined_count;
+				out << "\"AVG_TEMP\":\"" << get_temperature_string(avg_temp) << "\",";
+			} else {
 				out << "\"AVG_TEMP\":\"0.0\",";
-			out << "\"MIN_TEMP\":\"" << ( stats_yearly[i].min_temp == 0 ? 0 : get_temp_units(stats_yearly[i].min_temp, NULL)) << "\",";
-			out << "\"MAX_TEMP\":\"" << ( stats_yearly[i].max_temp == 0 ? 0 : get_temp_units(stats_yearly[i].max_temp, NULL)) << "\",";
+			}
+			out << "\"MIN_TEMP\":\"" << (stats_yearly[i].min_temp.mkelvin == 0 ? 0 : get_temperature_string(stats_yearly[i].min_temp)) << "\",";
+			out << "\"MAX_TEMP\":\"" << (stats_yearly[i].max_temp.mkelvin == 0 ? 0 : get_temperature_string(stats_yearly[i].max_temp)) << "\",";
 			out << "},";
 			total_stats.selection_size += stats_yearly[i].selection_size;
 			total_stats.total_time.seconds += stats_yearly[i].total_time.seconds;
@@ -137,7 +143,7 @@ void exportHtmlInitLogic(const QString &filename, struct htmlExportSetting &hes)
 
 	exportHTMLsettings(json_settings, hes);
 	exportHTMLstatistics(stat_file, hes);
-	export_translation(translation.toUtf8().data());
+	export_translation(qPrintable(translation));
 
 	export_HTML(qPrintable(json_dive_data), qPrintable(photosDirectory), hes.selectedOnly, hes.listOnly);
 

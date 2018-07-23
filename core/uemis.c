@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /*
  * uemis.c
  *
@@ -11,7 +12,6 @@
 
 #include "gettext.h"
 
-#include "dive.h"
 #include "uemis.h"
 #include <libdivecomputer/parser.h>
 #include <libdivecomputer/version.h>
@@ -173,8 +173,8 @@ void uemis_set_divelocation(int divespot, char *text, double longitude, double l
 			struct dive_site *ds = get_dive_site_by_uuid(hp->dive_site_uuid);
 			if (ds) {
 				ds->name = strdup(text);
-				ds->longitude.udeg = round(longitude * 1000000);
-				ds->latitude.udeg = round(latitude * 1000000);
+				ds->longitude.udeg = lrint(longitude * 1000000);
+				ds->latitude.udeg = lrint(latitude * 1000000);
 			}
 		}
 		hp = hp->next;
@@ -298,7 +298,6 @@ void uemis_parse_divelog_binary(char *base64, void *datap)
 	struct divecomputer *dc = &dive->dc;
 	int template, gasoffset;
 	uint8_t active = 0;
-	char version[5];
 
 	datalen = uemis_convert_base64(base64, &data);
 	dive->dc.airtemp.mkelvin = C_to_mkelvin((*(uint16_t *)(data + 45)) / 10.0);
@@ -329,7 +328,7 @@ void uemis_parse_divelog_binary(char *base64, void *datap)
 	if (template == 0)
 		template = 1;
 	for (i = 0; i < template; i++) {
-		float volume = *(float *)(data + 116 + 25 * (gasoffset + i)) * 1000.0;
+		float volume = *(float *)(data + 116 + 25 * (gasoffset + i)) * 1000.0f;
 		/* uemis always assumes a working pressure of 202.6bar (!?!?) - I first thought
 		 * it was 3000psi, but testing against all my dives gets me that strange number.
 		 * Still, that's of course completely bogus and shows they don't get how
@@ -337,7 +336,7 @@ void uemis_parse_divelog_binary(char *base64, void *datap)
 		 * we store the incorrect working pressure to get the SAC calculations "close"
 		 * but the user will have to correct this manually
 		 */
-		dive->cylinder[i].type.size.mliter = rint(volume);
+		dive->cylinder[i].type.size.mliter = lrintf(volume);
 		dive->cylinder[i].type.workingpressure.mbar = 202600;
 		dive->cylinder[i].gasmix.o2.permille = *(uint8_t *)(data + 120 + 25 * (gasoffset + i)) * 10;
 		dive->cylinder[i].gasmix.he.permille = 0;
@@ -358,8 +357,8 @@ void uemis_parse_divelog_binary(char *base64, void *datap)
 		sample->time.seconds = u_sample->dive_time;
 		sample->depth.mm = rel_mbar_to_depth(u_sample->water_pressure, dive);
 		sample->temperature.mkelvin = C_to_mkelvin(u_sample->dive_temperature / 10.0);
-		sample->sensor = active;
-		sample->cylinderpressure.mbar =
+		sample->sensor[0] = active;
+		sample->pressure[0].mbar =
 			(u_sample->tank_pressure_high * 256 + u_sample->tank_pressure_low) * 10;
 		sample->cns = u_sample->cns;
 		uemis_event(dive, dc, sample, u_sample);
@@ -373,8 +372,8 @@ void uemis_parse_divelog_binary(char *base64, void *datap)
 	/* get data from the footer */
 	char buffer[24];
 
-	snprintf(version, sizeof(version), "%1u.%02u", data[18], data[17]);
-	add_extra_data(dc, "FW Version", version);
+	snprintf(buffer, sizeof(buffer), "%1u.%02u", data[18], data[17]);
+	add_extra_data(dc, "FW Version", buffer);
 	snprintf(buffer, sizeof(buffer), "%08x", *(uint32_t *)(data + 9));
 	add_extra_data(dc, "Serial", buffer);
 	snprintf(buffer, sizeof(buffer), "%d", *(uint16_t *)(data + i + 35));

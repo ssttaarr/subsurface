@@ -1,6 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "profile-widget/divetooltipitem.h"
 #include "profile-widget/divecartesianaxis.h"
-#include "core/dive.h"
 #include "core/profile.h"
 #include "core/membuffer.h"
 #include "core/metrics.h"
@@ -108,7 +108,7 @@ void ToolTipItem::expand()
 		width = title->boundingRect().width() + sp2;
 	// clip the height
 	if (entryToolTip.first) {
-		const int minH = entryToolTip.first->y() + entryToolTip.first->pixmap().height() + sp2;
+		const int minH = lrint(entryToolTip.first->y() + entryToolTip.first->pixmap().height() + sp2);
 		if (height < minH)
 			height = minH;
 	} else if (height < iconMetrics.sz_small) {
@@ -194,9 +194,8 @@ void ToolTipItem::mouseReleaseEvent(QGraphicsSceneMouseEvent *event)
 	}
 }
 
-void ToolTipItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget)
+void ToolTipItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget*)
 {
-	Q_UNUSED(widget);
 	painter->save();
 	painter->setClipRect(option->rect);
 	painter->setPen(pen());
@@ -245,7 +244,7 @@ void ToolTipItem::refresh(const QPointF &pos)
 		return;
 	refreshTime.start();
 
-	int time = timeAxis->valueAt(pos);
+	int time = lrint(timeAxis->valueAt(pos));
 	if (time == lastTime)
 		return;
 
@@ -269,9 +268,9 @@ void ToolTipItem::refresh(const QPointF &pos)
 
 		painter.setPen(QColor(0, 0, 0, 255));
 		if (decoMode() == BUEHLMANN)
-			painter.drawLine(0, 60 - entry->gfline / 2, 16, 60 - entry->gfline / 2);
-		painter.drawLine(0, 60 - AMB_PERCENTAGE * (entry->pressures.n2 + entry->pressures.he) / entry->ambpressure / 2,
-				16, 60 - AMB_PERCENTAGE * (entry->pressures.n2 + entry->pressures.he) / entry->ambpressure /2);
+			painter.drawLine(0, lrint(60 - entry->gfline / 2), 16, lrint(60 - entry->gfline / 2));
+		painter.drawLine(0, lrint(60 - AMB_PERCENTAGE * (entry->pressures.n2 + entry->pressures.he) / entry->ambpressure / 2),
+				16, lrint(60 - AMB_PERCENTAGE * (entry->pressures.n2 + entry->pressures.he) / entry->ambpressure /2));
 		painter.setPen(QColor(0, 0, 0, 127));
 		for (int i=0; i<16; i++) {
 			painter.drawLine(i, 60, i, 60 - entry->percentages[i] / 2);

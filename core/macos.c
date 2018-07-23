@@ -1,9 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0
 /* macos.c */
 /* implements Mac OS X specific functions */
+#include "ssrf.h"
 #include <stdlib.h>
 #include <dirent.h>
 #include <fnmatch.h>
 #include "dive.h"
+#include "subsurface-string.h"
 #include "display.h"
 #include <CoreFoundation/CoreFoundation.h>
 #if !defined(__IPHONE_5_0)
@@ -17,7 +20,7 @@
 
 void subsurface_user_info(struct user_info *info)
 {
-	(void) info;
+	UNUSED(info);
 	/* Nothing, let's use libgit2-20 on MacOS */
 }
 
@@ -44,7 +47,7 @@ void subsurface_OS_pref_setup(void)
 
 bool subsurface_ignore_font(const char *font)
 {
-	(void) font;
+	UNUSED(font);
 	// there are no old default fonts to ignore
 	return false;
 }
@@ -80,18 +83,17 @@ const char *system_default_directory(void)
 
 const char *system_default_filename(void)
 {
-	static char *filename = NULL;
-	if (!filename) {
+	static const char *path = NULL;
+	if (!path) {
 		const char *user = getenv("LOGNAME");
-		if (same_string(user, ""))
+		if (empty_string(user))
 			user = "username";
-		filename = calloc(strlen(user) + 5, 1);
+		char *filename = calloc(strlen(user) + 5, 1);
 		strcat(filename, user);
 		strcat(filename, ".xml");
-	}
-	static const char *path = NULL;
-	if (!path)
 		path = system_default_path_append(filename);
+		free(filename);
+	}
 	return path;
 }
 
@@ -190,6 +192,11 @@ int subsurface_access(const char *path, int mode)
 	return access(path, mode);
 }
 
+int subsurface_stat(const char* path, struct stat* buf)
+{
+	return stat(path, buf);
+}
+
 struct zip *subsurface_zip_open_readonly(const char *path, int flags, int *errorp)
 {
 	return zip_open(path, flags, errorp);
@@ -201,10 +208,8 @@ int subsurface_zip_close(struct zip *zip)
 }
 
 /* win32 console */
-void subsurface_console_init(bool dedicated, bool logfile)
+void subsurface_console_init(void)
 {
-	(void)dedicated;
-	(void)logfile;
 	/* NOP */
 }
 
@@ -215,5 +220,5 @@ void subsurface_console_exit(void)
 
 bool subsurface_user_is_root()
 {
-	return (geteuid() == 0);
+	return geteuid() == 0;
 }

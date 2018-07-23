@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /* main.c */
 #include <locale.h>
 #include <stdio.h>
@@ -5,50 +6,95 @@
 #include <stdlib.h>
 #include <time.h>
 
-#include "core/dive.h"
 #include "core/qt-gui.h"
 #include "core/subsurfacestartup.h"
 #include "core/color.h"
 #include "core/qthelper.h"
-#include "core/helpers.h"
+#include "core/downloadfromdcthread.h"
 
 #include <QStringList>
 #include <QApplication>
 #include <QLoggingCategory>
+#include <QLocale>
 #include <git2.h>
+
+// Implementation of STP logging
+#include "core/ssrf.h"
+#ifdef ENABLE_STARTUP_TIMING
+#include <QElapsedTimer>
+#include <QMutex>
+#include <QMutexLocker>
+void log_stp(const char *ident, QString *buf)
+{
+	static bool firstCall = true;
+	static QElapsedTimer stpDuration;
+	static QString stpText;
+	static QMutex logMutex;
+
+	QMutexLocker l(&logMutex);
+
+	if (firstCall) {
+		firstCall = false;
+		stpDuration.start();
+	}
+	if (ident)
+		stpText += QString("STP ") \
+					.append(QString::number(stpDuration.elapsed())) \
+					.append(" ms, ") \
+					.append(ident) \
+					.append("\n");
+	if (buf) {
+		*buf += "---------- startup timer ----------\n";
+		*buf += stpText;
+	}
+}
+#endif // ENABLE_STARTUP_TIMING
+
 
 int main(int argc, char **argv)
 {
+	LOG_STP("main starting");
+
 	int i;
+	QGuiApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
 	QLoggingCategory::setFilterRules(QStringLiteral("qt.bluetooth* = true"));
-	QApplication *application = new QApplication(argc, argv);
-	(void)application;
+
+	// Start application
+	new QApplication(argc, argv);
+	LOG_STP("main Qt started");
+
+	// and get comand line arguments
 	QStringList arguments = QCoreApplication::arguments();
 
-	bool dedicated_console = arguments.length() > 1 &&
-				 (arguments.at(1) == QString("--win32console"));
-	subsurface_console_init(dedicated_console, false);
+	subsurface_console_init();
 
 	for (i = 1; i < arguments.length(); i++) {
 		QString a = arguments.at(i);
 		if (!a.isEmpty() && a.at(0) == '-') {
-			parse_argument(a.toLocal8Bit().data());
+			parse_argument(qPrintable(a));
 			continue;
 		}
 	}
 	git_libgit2_init();
+	LOG_STP("main git loaded");
 	setup_system_prefs();
-	if (uiLanguage(0).contains("-US"))
-		default_prefs.units = IMPERIAL_units;
-	prefs = default_prefs;
-	fill_profile_color();
-	parse_xml_init();
-	taglist_init_global();
-	init_ui();
-	if (prefs.default_file_behavior == LOCAL_DEFAULT_FILE)
-		set_filename(prefs.default_filename, true);
+	if (QLocale().measurementSystem() == QLocale::MetricSystem)
+		default_prefs.units = SI_units;
 	else
-		set_filename(NULL, true);
+		default_prefs.units = IMPERIAL_units;
+	copy_prefs(&default_prefs, &prefs);
+	fill_computer_list();
+
+	parse_xml_init();
+	LOG_STP("main xml parsed");
+	taglist_init_global();
+	LOG_STP("main taglist done");
+	init_ui();
+	LOG_STP("main init_ui done");
+	if (prefs.default_file_behavior == LOCAL_DEFAULT_FILE)
+		set_filename(prefs.default_filename);
+	else
+		set_filename(NULL);
 
 	// some hard coded settings
 	prefs.animation_speed = 0; // we render the profile to pixmap, no animations
@@ -58,6 +104,7 @@ int main(int argc, char **argv)
 
 	init_proxy();
 
+	LOG_STP("main call run_ui (continue in qmlmanager)");
 	if (!quit)
 		run_ui();
 	exit_ui();
@@ -66,4 +113,22 @@ int main(int argc, char **argv)
 	subsurface_console_exit();
 	free_prefs();
 	return 0;
+}
+
+void set_non_bt_addresses() {
+#if defined(Q_OS_ANDROID)
+	connectionListModel.addAddress("FTDI");
+#elif defined(Q_OS_LINUX) // since this is in the else, it does NOT include Android
+	connectionListModel.addAddress("/dev/ttyS0");
+	connectionListModel.addAddress("/dev/ttyS1");
+	connectionListModel.addAddress("/dev/ttyS2");
+	connectionListModel.addAddress("/dev/ttyS3");
+	// this makes debugging so much easier - use the simulator
+	connectionListModel.addAddress("/tmp/ttyS1");
+#endif
+}
+
+bool haveFilesOnCommandLine()
+{
+	return false;
 }

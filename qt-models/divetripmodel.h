@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #ifndef DIVETRIPMODEL_H
 #define DIVETRIPMODEL_H
 
@@ -22,7 +23,9 @@ public:
 		SAC,
 		OTU,
 		MAXCNS,
+		TAGS,
 		PHOTOS,
+		COUNTRY,
 		LOCATION,
 		COLUMNS
 	};
@@ -36,8 +39,12 @@ public:
 	QString displayDepth() const;
 	QString displayDepthWithUnit() const;
 	QString displayTemperature() const;
+	QString displayTemperatureWithUnit() const;
 	QString displayWeight() const;
+	QString displayWeightWithUnit() const;
 	QString displaySac() const;
+	QString displaySacWithUnit() const;
+	QString displayTags() const;
 	int countPhotos(dive *dive) const;
 	int weight() const;
 	QString icon_names[4];
@@ -67,7 +74,9 @@ public:
 		SAC,
 		OTU,
 		MAXCNS,
+		TAGS,
 		PHOTOS,
+		COUNTRY,
 		LOCATION,
 		COLUMNS
 	};
@@ -91,10 +100,13 @@ public:
 	DiveTripModel(QObject *parent = 0);
 	Layout layout() const;
 	void setLayout(Layout layout);
+	int columnWidth(int column);
+	void setColumnWidth(int column, int width);
 
 private:
 	void setupModelData();
 	QMap<dive_trip_t *, TripItem *> trips;
+	QVector<int> columnWidthMap;
 	Layout currentLayout;
 };
 

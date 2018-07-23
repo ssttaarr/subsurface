@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #ifndef ABSTRACTPREFERENCESWIDGET_H
 #define ABSTRACTPREFERENCESWIDGET_H
 
@@ -7,10 +8,10 @@
 class AbstractPreferencesWidget : public QWidget {
 	Q_OBJECT
 public:
-	AbstractPreferencesWidget(const QString& name, const QIcon& icon, float positionHeight);
+	AbstractPreferencesWidget(const QString& name, const QIcon& icon, double positionHeight);
 	QIcon icon() const;
 	QString name() const;
-	float positionHeight() const;
+	double positionHeight() const;
 
 	/* gets the values from the preferences and should set the correct values in
 	 * the interface */
@@ -25,6 +26,6 @@ signals:
 private:
 	QIcon _icon;
 	QString _name;
-	float _positionHeight;
+	double _positionHeight;
 };
 #endif

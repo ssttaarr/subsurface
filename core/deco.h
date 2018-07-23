@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #ifndef DECO_H
 #define DECO_H
 
@@ -5,15 +6,11 @@
 extern "C" {
 #endif
 
-extern double tolerated_by_tissue[];
 extern double buehlmann_N2_t_halflife[];
-extern double tissue_inertgas_saturation[16];
-extern double buehlmann_inertgas_a[16], buehlmann_inertgas_b[16];
-extern double gf_low_pressure_this_dive;
 
 extern int deco_allowed_depth(double tissues_tolerance, double surface_pressure, struct dive *dive, bool smooth);
 
-double get_gf(double ambpressure_bar, const struct dive *dive);
+double get_gf(struct deco_state *ds, double ambpressure_bar, const struct dive *dive);
 
 #ifdef __cplusplus
 }

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "profile-widget/ruleritem.h"
 #ifndef SUBSURFACE_MOBILE
 #include "desktop-widgets/preferences/preferencesdialog.h"
@@ -127,7 +128,7 @@ void RulerItem2::recalculate()
 	const qreal diff = begin.x() + textItem->boundingRect().width();
 	// clamp so that the text doesn't go out of the screen to the right
 	if (diff > view->width()) {
-		begin.setX(begin.x() - (diff - view->width()));
+		begin.setX(lrint(begin.x() - (diff - view->width())));
 		tgtX = mapFromScene(view->mapToScene(begin)).x();
 	}
 	// always show the text bellow the lowest of the start and end points

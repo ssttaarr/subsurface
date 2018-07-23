@@ -1,10 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0
 /* statistics.c
  *
  * core logic for the Info & Stats page -
- * char *get_time_string(int seconds, int maxdays);
  * char *get_minutes(int seconds);
  * void process_all_dives(struct dive *dive, struct dive **prev_dive);
- * void get_selected_dives_text(char *buffer, int size);
  */
 #include "gettext.h"
 #include <string.h>
@@ -24,31 +23,31 @@ stats_t *stats_by_type = NULL;
 
 static void process_temperatures(struct dive *dp, stats_t *stats)
 {
-	int min_temp, mean_temp, max_temp = 0;
+	temperature_t min_temp, mean_temp, max_temp = {.mkelvin = 0};
 
-	max_temp = dp->maxtemp.mkelvin;
-	if (max_temp && (!stats->max_temp || max_temp > stats->max_temp))
-		stats->max_temp = max_temp;
+	max_temp.mkelvin = dp->maxtemp.mkelvin;
+	if (max_temp.mkelvin && (!stats->max_temp.mkelvin || max_temp.mkelvin > stats->max_temp.mkelvin))
+		stats->max_temp.mkelvin = max_temp.mkelvin;
 
-	min_temp = dp->mintemp.mkelvin;
-	if (min_temp && (!stats->min_temp || min_temp < stats->min_temp))
-		stats->min_temp = min_temp;
+	min_temp.mkelvin = dp->mintemp.mkelvin;
+	if (min_temp.mkelvin && (!stats->min_temp.mkelvin || min_temp.mkelvin < stats->min_temp.mkelvin))
+		stats->min_temp.mkelvin = min_temp.mkelvin;
 
-	if (min_temp || max_temp) {
-		mean_temp = min_temp;
-		if (mean_temp)
-			mean_temp = (mean_temp + max_temp) / 2;
+	if (min_temp.mkelvin || max_temp.mkelvin) {
+		mean_temp.mkelvin = min_temp.mkelvin;
+		if (mean_temp.mkelvin)
+			mean_temp.mkelvin = (mean_temp.mkelvin + max_temp.mkelvin) / 2;
 		else
-			mean_temp = max_temp;
-		stats->combined_temp += get_temp_units(mean_temp, NULL);
+			mean_temp.mkelvin = max_temp.mkelvin;
+		stats->combined_temp.mkelvin += mean_temp.mkelvin;
 		stats->combined_count++;
 	}
 }
 
-static void process_dive(struct dive *dp, stats_t *stats)
+static void process_dive(struct dive *dive, stats_t *stats)
 {
 	int old_tadt, sac_time = 0;
-	uint32_t duration = dp->duration.seconds;
+	int32_t duration = dive->duration.seconds;
 
 	old_tadt = stats->total_average_depth_time.seconds;
 	stats->total_time.seconds += duration;
@@ -56,32 +55,32 @@ static void process_dive(struct dive *dp, stats_t *stats)
 		stats->longest_time.seconds = duration;
 	if (stats->shortest_time.seconds == 0 || duration < stats->shortest_time.seconds)
 		stats->shortest_time.seconds = duration;
-	if (dp->maxdepth.mm > stats->max_depth.mm)
-		stats->max_depth.mm = dp->maxdepth.mm;
-	if (stats->min_depth.mm == 0 || dp->maxdepth.mm < stats->min_depth.mm)
-		stats->min_depth.mm = dp->maxdepth.mm;
+	if (dive->maxdepth.mm > stats->max_depth.mm)
+		stats->max_depth.mm = dive->maxdepth.mm;
+	if (stats->min_depth.mm == 0 || dive->maxdepth.mm < stats->min_depth.mm)
+		stats->min_depth.mm = dive->maxdepth.mm;
 
-	process_temperatures(dp, stats);
+	process_temperatures(dive, stats);
 
 	/* Maybe we should drop zero-duration dives */
 	if (!duration)
 		return;
-	if (dp->meandepth.mm) {
+	if (dive->meandepth.mm) {
 		stats->total_average_depth_time.seconds += duration;
-		stats->avg_depth.mm = (1.0 * old_tadt * stats->avg_depth.mm +
-				       duration * dp->meandepth.mm) /
-				stats->total_average_depth_time.seconds;
+		stats->avg_depth.mm = lrint((1.0 * old_tadt * stats->avg_depth.mm +
+					duration * dive->meandepth.mm) /
+					stats->total_average_depth_time.seconds);
 	}
-	if (dp->sac > 100) { /* less than .1 l/min is bogus, even with a pSCR */
-		sac_time = stats->total_sac_time + duration;
-		stats->avg_sac.mliter = (1.0 * stats->total_sac_time * stats->avg_sac.mliter +
-					 duration * dp->sac) /
-					sac_time;
-		if (dp->sac > stats->max_sac.mliter)
-			stats->max_sac.mliter = dp->sac;
-		if (stats->min_sac.mliter == 0 || dp->sac < stats->min_sac.mliter)
-			stats->min_sac.mliter = dp->sac;
-		stats->total_sac_time = sac_time;
+	if (dive->sac > 100) { /* less than .1 l/min is bogus, even with a pSCR */
+		sac_time = stats->total_sac_time.seconds + duration;
+		stats->avg_sac.mliter = lrint((1.0 * stats->total_sac_time.seconds * stats->avg_sac.mliter +
+					 duration * dive->sac) /
+					 sac_time);
+		if (dive->sac > stats->max_sac.mliter)
+			stats->max_sac.mliter = dive->sac;
+		if (stats->min_sac.mliter == 0 || dive->sac < stats->min_sac.mliter)
+			stats->min_sac.mliter = dive->sac;
+		stats->total_sac_time.seconds = sac_time;
 	}
 }
 
@@ -124,7 +123,7 @@ void process_all_dives(struct dive *dive, struct dive **prev_dive)
 	free(stats_by_type);
 
 	size = sizeof(stats_t) * (dive_table.nr + 1);
-	tsize = sizeof(stats_t) * (NUM_DC_TYPE + 1);
+	tsize = sizeof(stats_t) * (NUM_DIVEMODE + 1);
 	stats_yearly = malloc(size);
 	stats_monthly = malloc(size);
 	stats_by_trip = malloc(size);
@@ -139,15 +138,15 @@ void process_all_dives(struct dive *dive, struct dive **prev_dive)
 
 	/* Setting the is_trip to true to show the location as first
 	 * field in the statistics window */
-	stats_by_type[0].location = strdup("All (by type stats)");
+	stats_by_type[0].location = strdup(translate("gettextFromC", "All (by type stats)"));
 	stats_by_type[0].is_trip = true;
-	stats_by_type[1].location = strdup("OC");
+	stats_by_type[1].location = strdup(translate("gettextFromC", divemode_text_ui[OC]));
 	stats_by_type[1].is_trip = true;
-	stats_by_type[2].location = strdup("CCR");
+	stats_by_type[2].location = strdup(translate("gettextFromC", divemode_text_ui[CCR]));
 	stats_by_type[2].is_trip = true;
-	stats_by_type[3].location = strdup("pSCR");
+	stats_by_type[3].location = strdup(translate("gettextFromC", divemode_text_ui[PSCR]));
 	stats_by_type[3].is_trip = true;
-	stats_by_type[4].location = strdup("Freedive");
+	stats_by_type[4].location = strdup(translate("gettextFromC", divemode_text_ui[FREEDIVE]));
 	stats_by_type[4].is_trip = true;
 
 	/* this relies on the fact that the dives in the dive_table
@@ -192,7 +191,7 @@ void process_all_dives(struct dive *dive, struct dive **prev_dive)
 			stats_by_trip[0].selection_size++;
 			process_dive(dp, &(stats_by_trip[0]));
 			stats_by_trip[0].is_trip = true;
-			stats_by_trip[0].location = strdup("All (by trip stats)");
+			stats_by_trip[0].location = strdup(translate("gettextFromC", "All (by trip stats)"));
 
 			process_dive(dp, &(stats_by_trip[trip_iter]));
 			stats_by_trip[trip_iter].selection_size++;
@@ -235,98 +234,10 @@ void process_selected_dives(void)
 	stats_selection.selection_size = nr;
 }
 
-char *get_time_string_s(int seconds, int maxdays, bool freediving)
-{
-	static char buf[80];
-	if (maxdays && seconds > 3600 * 24 * maxdays) {
-		snprintf(buf, sizeof(buf), translate("gettextFromC", "more than %d days"), maxdays);
-	} else {
-		int days = seconds / 3600 / 24;
-		int hours = (seconds - days * 3600 * 24) / 3600;
-		int minutes = (seconds - days * 3600 * 24 - hours * 3600) / 60;
-		int secs = (seconds - days * 3600 * 24 - hours * 3600 - minutes*60);
-		if (days > 0)
-			snprintf(buf, sizeof(buf), translate("gettextFromC", "%dd %dh %dmin"), days, hours, minutes);
-		else
-			if (freediving && seconds < 3600)
-				snprintf(buf, sizeof(buf), translate("gettextFromC", "%dmin %dsecs"), minutes, secs);
-			else
-				snprintf(buf, sizeof(buf), translate("gettextFromC", "%dh %dmin"), hours, minutes);
-	}
-	return buf;
-}
-
-/* this gets called when at least two but not all dives are selected */
-static void get_ranges(char *buffer, int size)
-{
-	int i, len;
-	int first = -1, last = -1;
-	struct dive *dive;
-
-	snprintf(buffer, size, "%s", translate("gettextFromC", "for dives #"));
-	for_each_dive (i, dive) {
-		if (!dive->selected)
-			continue;
-		if (dive->number < 1) {
-			/* uhh - weird numbers - bail */
-			snprintf(buffer, size, "%s", translate("gettextFromC", "for selected dives"));
-			return;
-		}
-		len = strlen(buffer);
-		if (last == -1) {
-			snprintf(buffer + len, size - len, "%d", dive->number);
-			first = last = dive->number;
-		} else {
-			if (dive->number == last + 1) {
-				last++;
-				continue;
-			} else {
-				if (first == last)
-					snprintf(buffer + len, size - len, ", %d", dive->number);
-				else if (first + 1 == last)
-					snprintf(buffer + len, size - len, ", %d, %d", last, dive->number);
-				else
-					snprintf(buffer + len, size - len, "-%d, %d", last, dive->number);
-				first = last = dive->number;
-			}
-		}
-	}
-	len = strlen(buffer);
-	if (first != last) {
-		if (first + 1 == last)
-			snprintf(buffer + len, size - len, ", %d", last);
-		else
-			snprintf(buffer + len, size - len, "-%d", last);
-	}
-}
-
-void get_selected_dives_text(char *buffer, size_t size)
-{
-	if (amount_selected == 1) {
-		if (current_dive)
-			snprintf(buffer, size, translate("gettextFromC", "for dive #%d"), current_dive->number);
-		else
-			snprintf(buffer, size, "%s", translate("gettextFromC", "for selected dive"));
-	} else if (amount_selected == (unsigned int)dive_table.nr) {
-		snprintf(buffer, size, "%s", translate("gettextFromC", "for all dives"));
-	} else if (amount_selected == 0) {
-		snprintf(buffer, size, "%s", translate("gettextFromC", "(no dives)"));
-	} else {
-		get_ranges(buffer, size);
-		if (strlen(buffer) == size - 1) {
-			/* add our own ellipse... the way Pango does this is ugly
-			 * as it will leave partial numbers there which I don't like */
-			size_t offset = 4;
-			while (offset < size && isdigit(buffer[size - offset]))
-				offset++;
-			strcpy(buffer + size - offset, "...");
-		}
-	}
-}
-
 #define SOME_GAS 5000 // 5bar drop in cylinder pressure makes cylinder used
 
-bool has_gaschange_event(struct dive *dive, struct divecomputer *dc, int idx) {
+bool has_gaschange_event(struct dive *dive, struct divecomputer *dc, int idx)
+{
 	bool first_gas_explicit = false;
 	struct event *event = get_next_event(dc->events, "gaschange");
 	while (event) {
@@ -337,8 +248,12 @@ bool has_gaschange_event(struct dive *dive, struct divecomputer *dc, int idx) {
 			return true;
 		event = get_next_event(event->next, "gaschange");
 	}
-	if (dc->divemode == CCR && (idx == dive->diluent_cylinder_index || idx == dive->oxygen_cylinder_index))
-		return true;
+	if (dc->divemode == CCR) {
+		if (idx == get_cylinder_idx_by_use(dive, DILUENT))
+			return true;
+		if (idx == get_cylinder_idx_by_use(dive, OXYGEN))
+			return true;
+	}
 	return !first_gas_explicit && idx == 0;
 }
 
@@ -350,6 +265,23 @@ bool is_cylinder_used(struct dive *dive, int idx)
 
 	if ((dive->cylinder[idx].start.mbar - dive->cylinder[idx].end.mbar) > SOME_GAS)
 		return true;
+
+	if ((dive->cylinder[idx].sample_start.mbar - dive->cylinder[idx].sample_end.mbar) > SOME_GAS)
+		return true;
+
+	for_each_dc(dive, dc) {
+		if (has_gaschange_event(dive, dc, idx))
+			return true;
+	}
+	return false;
+}
+
+bool is_cylinder_prot(struct dive *dive, int idx)
+{
+	struct divecomputer *dc;
+	if (cylinder_none(&dive->cylinder[idx]))
+		return false;
+
 	for_each_dc(dive, dc) {
 		if (has_gaschange_event(dive, dc, idx))
 			return true;
@@ -360,23 +292,10 @@ bool is_cylinder_used(struct dive *dive, int idx)
 void get_gas_used(struct dive *dive, volume_t gases[MAX_CYLINDERS])
 {
 	int idx;
-	struct divecomputer *dc;
-	bool used;
 
 	for (idx = 0; idx < MAX_CYLINDERS; idx++) {
-		used = false;
 		cylinder_t *cyl = &dive->cylinder[idx];
 		pressure_t start, end;
-
-		for_each_dc(dive, dc) {
-			if (same_string(dc->model, "planned dive"))
-				continue;
-			if (has_gaschange_event(dive, dc, idx))
-				used = true;
-		}
-
-		if (!used)
-			continue;
 
 		start = cyl->start.mbar ? cyl->start : cyl->sample_start;
 		end = cyl->end.mbar ? cyl->end : cyl->sample_end;
@@ -396,8 +315,8 @@ static void get_gas_parts(struct gasmix mix, volume_t vol, int o2_in_topup, volu
 		return;
 	}
 
-	air.mliter = rint(((double)vol.mliter * (1000 - get_he(&mix) - get_o2(&mix))) / (1000 - o2_in_topup));
-	he->mliter = rint(((double)vol.mliter * get_he(&mix)) / 1000.0);
+	air.mliter = lrint(((double)vol.mliter * (1000 - get_he(&mix) - get_o2(&mix))) / (1000 - o2_in_topup));
+	he->mliter = lrint(((double)vol.mliter * get_he(&mix)) / 1000.0);
 	o2->mliter += vol.mliter - he->mliter - air.mliter;
 }
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "smrtk2ssrfc_window.h"
 #include "ui_smrtk2ssrfc_window.h"
 #include "qt-models/filtermodels.h"
@@ -10,6 +11,14 @@
 
 QStringList inputFiles;
 QString outputFile;
+QString error_buf;
+
+extern "C" void getErrorFromC(char *buf)
+{
+	QString error(buf);
+	free(buf);
+	error_buf = error;
+}
 
 Smrtk2ssrfcWindow::Smrtk2ssrfcWindow(QWidget *parent) :
 	QMainWindow(parent),
@@ -26,14 +35,14 @@ Smrtk2ssrfcWindow::~Smrtk2ssrfcWindow()
 	delete ui;
 }
 
-QString Smrtk2ssrfcWindow::lastUsedDir()
+static QString lastUsedDir()
 {
 	QSettings settings;
 	QString lastDir = QDir::homePath();
 
 	settings.beginGroup("FileDialog");
 	if (settings.contains("LastDir"))
-		if (QDir::setCurrent(settings.value("LastDir").toString()))
+		if (QDir(settings.value("LastDir").toString()).exists())
 			lastDir = settings.value("LastDir").toString();
 	return lastDir;
 }
@@ -48,8 +57,7 @@ void Smrtk2ssrfcWindow::updateLastUsedDir(const QString &dir)
 void Smrtk2ssrfcWindow::on_inputFilesButton_clicked()
 {
 	inputFiles = QFileDialog::getOpenFileNames(this, tr("Open SmartTrak files"), lastUsedDir(),
-		tr("SmartTrak files (*.slg *.SLG);;"
-		   "All files (*)"));
+		tr("SmartTrak files") + " (*.slg);;" + tr("All files") + " (*.*)");
 	if (inputFiles.isEmpty())
 		return;
 	updateLastUsedDir(QFileInfo(inputFiles[0]).dir().path());
@@ -60,8 +68,7 @@ void Smrtk2ssrfcWindow::on_inputFilesButton_clicked()
 void Smrtk2ssrfcWindow::on_outputFileButton_clicked()
 {
 	outputFile = QFileDialog::getSaveFileName(this, tr("Open Subsurface files"), lastUsedDir(),
-		tr("Subsurface files (*.ssrf *SSRF *.xml *.XML);;"
-		   "All files (*)"));
+		tr("Subsurface files") + " (*.ssrf *.xml);;" + tr("All files") + " (*.*)");
 	if (outputFile.isEmpty())
 		return;
 	updateLastUsedDir(QFileInfo(outputFile).dir().path());
@@ -77,14 +84,15 @@ void Smrtk2ssrfcWindow::on_importButton_clicked()
 
 	ui->plainTextEdit->setDisabled(false);
 	ui->progressBar->setRange(0, inputFiles.size());
+	set_error_cb(&getErrorFromC);
 	for (int i = 0; i < inputFiles.size(); ++i) {
 		ui->progressBar->setValue(i);
 		fileNamePtr = QFile::encodeName(inputFiles.at(i));
 		smartrak_import(fileNamePtr.data(), &dive_table);
-		ui->plainTextEdit->appendPlainText(QString(get_error_string()));
+		ui->plainTextEdit->appendPlainText(error_buf);
 	}
 	ui->progressBar->setValue(inputFiles.size());
-	save_dives_logic(outputFile.toUtf8().data(), false);
+	save_dives_logic(qPrintable(outputFile), false);
 	ui->progressBar->setDisabled(true);
 }
 

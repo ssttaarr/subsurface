@@ -1,7 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
 /* divesite.c */
 #include "divesite.h"
 #include "dive.h"
+#include "subsurface-string.h"
 #include "divelist.h"
+#include "membuffer.h"
 
 #include <math.h>
 
@@ -64,7 +67,7 @@ unsigned int get_distance(degrees_t lat1, degrees_t lon1, degrees_t lat2, degree
 	double c = 2 * atan2(sqrt(a), sqrt(1.0 - a));
 
 	// Earth radious in metres
-	return 6371000 * c;
+	return lrint(6371000 * c);
 }
 
 /* find the closest one, no more than distance meters away - if more than one at same distance, pick the first */
@@ -105,12 +108,10 @@ static uint32_t dive_site_getUniqId()
 struct dive_site *alloc_or_get_dive_site(uint32_t uuid)
 {
 	struct dive_site *ds;
-	if (uuid) {
-		if ((ds = get_dive_site_by_uuid(uuid)) != NULL) {
-			fprintf(stderr, "PROBLEM: refusing to create dive site with the same uuid %08x\n", uuid);
-			return ds;
-		}
-	}
+
+	if (uuid && (ds = get_dive_site_by_uuid(uuid)) != NULL)
+		return ds;
+
 	int nr = dive_site_table.nr;
 	int allocated = dive_site_table.allocated;
 	struct dive_site **sites = dive_site_table.dive_sites;
@@ -189,14 +190,17 @@ uint32_t create_divesite_uuid(const char *name, timestamp_t divetime)
 {
 	if (name == NULL)
 		name ="";
-	unsigned char hash[20];
+	union {
+		unsigned char hash[20];
+		uint32_t i;
+	} u;
 	SHA_CTX ctx;
 	SHA1_Init(&ctx);
 	SHA1_Update(&ctx, &divetime, sizeof(timestamp_t));
 	SHA1_Update(&ctx, name, strlen(name));
-	SHA1_Final(hash, &ctx);
+	SHA1_Final(u.hash, &ctx);
 	// now return the first 32 of the 160 bit hash
-	return *(uint32_t *)hash;
+	return u.i;
 }
 
 /* allocate a new site and add it to the table */
@@ -205,7 +209,6 @@ uint32_t create_dive_site(const char *name, timestamp_t divetime)
 	uint32_t uuid = create_divesite_uuid(name, divetime);
 	struct dive_site *ds = alloc_or_get_dive_site(uuid);
 	ds->name = copy_string(name);
-
 	return uuid;
 }
 
@@ -237,13 +240,34 @@ uint32_t create_dive_site_with_gps(const char *name, degrees_t latitude, degrees
 /* a uuid is always present - but if all the other fields are empty, the dive site is pointless */
 bool dive_site_is_empty(struct dive_site *ds)
 {
-	return same_string(ds->name, "") &&
-	       same_string(ds->description, "") &&
-	       same_string(ds->notes, "") &&
+	return !ds ||
+	       (empty_string(ds->name) &&
+	       empty_string(ds->description) &&
+	       empty_string(ds->notes) &&
 	       ds->latitude.udeg == 0 &&
-	       ds->longitude.udeg == 0;
+	       ds->longitude.udeg == 0);
 }
 
+void copy_dive_site_taxonomy(struct dive_site *orig, struct dive_site *copy)
+{
+	if (orig->taxonomy.category == NULL) {
+		free_taxonomy(&copy->taxonomy);
+	} else {
+		if (copy->taxonomy.category == NULL)
+			copy->taxonomy.category = alloc_taxonomy();
+		for (int i = 0; i < TC_NR_CATEGORIES; i++) {
+			if (i < copy->taxonomy.nr) {
+				free((void *)copy->taxonomy.category[i].value);
+				copy->taxonomy.category[i].value = NULL;
+			}
+			if (i < orig->taxonomy.nr) {
+				copy->taxonomy.category[i] = orig->taxonomy.category[i];
+				copy->taxonomy.category[i].value = copy_string(orig->taxonomy.category[i].value);
+			}
+		}
+		copy->taxonomy.nr = orig->taxonomy.nr;
+	}
+}
 void copy_dive_site(struct dive_site *orig, struct dive_site *copy)
 {
 	free(copy->name);
@@ -256,20 +280,39 @@ void copy_dive_site(struct dive_site *orig, struct dive_site *copy)
 	copy->notes = copy_string(orig->notes);
 	copy->description = copy_string(orig->description);
 	copy->uuid = orig->uuid;
-	if (orig->taxonomy.category == NULL) {
-		free_taxonomy(&copy->taxonomy);
-	} else {
-		if (copy->taxonomy.category == NULL)
-			copy->taxonomy.category = alloc_taxonomy();
-		for (int i = 0; i < TC_NR_CATEGORIES; i++) {
-			if (i < copy->taxonomy.nr)
-				free((void *)copy->taxonomy.category[i].value);
-			if (i < orig->taxonomy.nr) {
-				copy->taxonomy.category[i] = orig->taxonomy.category[i];
-				copy->taxonomy.category[i].value = copy_string(orig->taxonomy.category[i].value);
-			}
-		}
-		copy->taxonomy.nr = orig->taxonomy.nr;
+	copy_dive_site_taxonomy(orig, copy);
+}
+
+static void merge_string(char **a, char **b)
+{
+	char *s1 = *a, *s2 = *b;
+
+	if (!s2)
+		return;
+
+	if (same_string(s1, s2))
+		return;
+
+	if (!s1) {
+		*a = strdup(s2);
+		return;
+	}
+
+	*a = format_string("(%s) or (%s)", s1, s2);
+	free(s1);
+}
+
+void merge_dive_site(struct dive_site *a, struct dive_site *b)
+{
+	if (!a->latitude.udeg) a->latitude.udeg = b->latitude.udeg;
+	if (!a->longitude.udeg) a->longitude.udeg = b->longitude.udeg;
+	merge_string(&a->name, &b->name);
+	merge_string(&a->notes, &b->notes);
+	merge_string(&a->description, &b->description);
+
+	if (!a->taxonomy.category) {
+		a->taxonomy = b->taxonomy;
+		memset(&b->taxonomy, 0, sizeof(b->taxonomy));
 	}
 }
 
@@ -278,9 +321,9 @@ void clear_dive_site(struct dive_site *ds)
 	free(ds->name);
 	free(ds->notes);
 	free(ds->description);
-	ds->name = 0;
-	ds->notes = 0;
-	ds->description = 0;
+	ds->name = NULL;
+	ds->notes = NULL;
+	ds->description = NULL;
 	ds->latitude.udeg = 0;
 	ds->longitude.udeg = 0;
 	ds->uuid = 0;
@@ -300,6 +343,7 @@ void merge_dive_sites(uint32_t ref, uint32_t* uuids, int count)
 			if (d->dive_site_uuid != uuids[i] )
 				continue;
 			d->dive_site_uuid = ref;
+			invalidate_dive_cache(d);
 		}
 	}
 

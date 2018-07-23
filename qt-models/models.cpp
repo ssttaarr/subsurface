@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * models.cpp
  *
@@ -5,7 +6,8 @@
  *
  */
 #include "qt-models/models.h"
-#include "core/helpers.h"
+#include "core/qthelper.h"
+#include "core/gettextfromc.h"
 
 #include <QLocale>
 
@@ -13,38 +15,49 @@
 
 const QPixmap &trashIcon()
 {
-	static QPixmap trash = QPixmap(":trash").scaledToHeight(defaultIconMetrics().sz_small);
+	static QPixmap trash = QPixmap(":list-remove-icon").scaledToHeight(defaultIconMetrics().sz_small);
 	return trash;
 }
 
 const QPixmap &trashForbiddenIcon()
 {
-	static QPixmap trash = QPixmap(":trashForbidden").scaledToHeight(defaultIconMetrics().sz_small);
+	static QPixmap trash = QPixmap(":list-remove-disabled-icon").scaledToHeight(defaultIconMetrics().sz_small);
 	return trash;
 }
 
-Qt::ItemFlags GasSelectionModel::flags(const QModelIndex &index) const
+Qt::ItemFlags GasSelectionModel::flags(const QModelIndex&) const
 {
-	Q_UNUSED(index);
 	return Qt::ItemIsEnabled | Qt::ItemIsSelectable;
 }
 
 GasSelectionModel *GasSelectionModel::instance()
 {
-	static QScopedPointer<GasSelectionModel> self(new GasSelectionModel());
-	return self.data();
+	static GasSelectionModel self;
+	return &self;
 }
 
-//TODO: Remove this #include here when the issue below is fixed.
-#include "diveplannermodel.h"
+static QStringList getGasList()
+{
+	QStringList list;
+	for (int i = 0; i < MAX_CYLINDERS; i++) {
+		cylinder_t *cyl = &displayed_dive.cylinder[i];
+		if (cylinder_nodata(cyl))
+			break;
+		/* Check if we have the same gasmix two or more times
+		 * If yes return more verbose string */
+		int same_gas = same_gasmix_cylinder(cyl, i, &displayed_dive, true);
+		if (same_gas == -1)
+			list.push_back(get_gas_string(cyl->gasmix));
+		else
+			list.push_back(get_gas_string(cyl->gasmix) + QString(" (%1 %2 ").arg(GasSelectionModel::tr("cyl.")).arg(i + 1) +
+				cyl->type.description + ")");
+	}
+	return list;
+}
+
 void GasSelectionModel::repopulate()
 {
-	/* TODO:
-	 * getGasList shouldn't be a member of DivePlannerPointsModel,
-	 * it has nothing to do with the current plain being calculated:
-	 * it's internal to the current_dive.
-	 */
-	setStringList(DivePlannerPointsModel::instance()->getGasList());
+	setStringList(getGasList());
 }
 
 QVariant GasSelectionModel::data(const QModelIndex &index, int role) const
@@ -54,6 +67,35 @@ QVariant GasSelectionModel::data(const QModelIndex &index, int role) const
 	}
 	return QStringListModel::data(index, role);
 }
+// Dive Type Model for the divetype combo box
+
+Qt::ItemFlags DiveTypeSelectionModel::flags(const QModelIndex&) const
+{
+	return Qt::ItemIsEnabled | Qt::ItemIsSelectable;
+}
+
+DiveTypeSelectionModel *DiveTypeSelectionModel::instance()
+{
+	static DiveTypeSelectionModel self;
+	return &self;
+}
+
+void DiveTypeSelectionModel::repopulate()
+{
+	QStringList modes = QStringList();
+	for (int i = 0; i < FREEDIVE; i++)
+		modes.append(gettextFromC::tr(divemode_text_ui[i]));
+	setStringList(modes);
+}
+
+QVariant DiveTypeSelectionModel::data(const QModelIndex &index, int role) const
+{
+	if (role == Qt::FontRole) {
+		return defaultModelFont();
+	}
+	return QStringListModel::data(index, role);
+}
+
 
 // Language Model, The Model to populate the list of possible Languages.
 
@@ -91,8 +133,7 @@ QVariant LanguageModel::data(const QModelIndex &index, int role) const
 	return QVariant();
 }
 
-int LanguageModel::rowCount(const QModelIndex &parent) const
+int LanguageModel::rowCount(const QModelIndex&) const
 {
-	Q_UNUSED(parent);
 	return languages.count();
 }

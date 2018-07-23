@@ -1,27 +1,17 @@
-#include <QCoreApplication>
-#include <QString>
+// SPDX-License-Identifier: GPL-2.0
 #include "gettextfromc.h"
+#include <QHash>
+#include <QMutex>
 
-const char *gettextFromC::trGettext(const char *text)
-{
-	QByteArray &result = translationCache[QByteArray(text)];
-	if (result.isEmpty())
-		result = translationCache[QByteArray(text)] = trUtf8(text).toUtf8();
-	return result.constData();
-}
-
-void gettextFromC::reset(void)
-{
-	translationCache.clear();
-}
-
-gettextFromC *gettextFromC::instance()
-{
-	static QScopedPointer<gettextFromC> self(new gettextFromC());
-	return self.data();
-}
+static QHash<QByteArray, QByteArray> translationCache;
+static QMutex lock;
 
 extern "C" const char *trGettext(const char *text)
 {
-	return gettextFromC::instance()->trGettext(text);
+	QByteArray key(text);
+	QMutexLocker l(&lock);
+	auto it = translationCache.find(key);
+	if (it == translationCache.end())
+		it = translationCache.insert(key, gettextFromC::tr(text).toUtf8());
+	return it->constData();
 }

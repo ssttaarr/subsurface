@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * divelistview.h
  *
@@ -34,6 +35,8 @@ public:
 	void restoreSelection();
 	void contextMenuEvent(QContextMenuEvent *event);
 	QList<dive_trip_t *> selectedTrips();
+	static QString lastUsedImageDir();
+	static void updateLastUsedImageDir(const QString &s);
 public
 slots:
 	void toggleColumnVisibilityByIndex();
@@ -55,7 +58,6 @@ slots:
 	void shiftTimes();
 	void loadImages();
 	void loadWebImages();
-	static QString lastUsedImageDir();
 
 signals:
 	void currentDiveChanged(int divenr);
@@ -69,6 +71,7 @@ private:
 	QModelIndex contextMenuIndex;
 	bool dontEmitDiveChangedSignal;
 	bool selectionSaved;
+	DiveTripModel *tripModel;
 
 	/* if dive_trip_t is null, there's no problem. */
 	QMultiHash<dive_trip_t *, int> selectedDives;
@@ -78,7 +81,6 @@ private:
 	void restoreExpandedRows();
 	int lastVisibleColumn();
 	void selectTrip(dive_trip_t *trip);
-	void updateLastUsedImageDir(const QString &s);
 	void updateLastImageTimeOffset(int offset);
 	int lastImageTimeOffset();
 	void addToTrip(int delta);

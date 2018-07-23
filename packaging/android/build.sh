@@ -38,6 +38,8 @@ BUILD_NR=0
 SUBSURFACE_DESKTOP=OFF
 # Which arch should we build for?
 ARCH=arm
+# Read build variables
+source subsurface/packaging/android/variables.sh 
 
 while [ "$#" -gt 0 ] ; do
 	case "$1" in
@@ -62,7 +64,11 @@ while [ "$#" -gt 0 ] ; do
 		arm|x86)
 			ARCH=$1
 			shift
-		;;
+			;;
+		*)
+			echo "Unknown argument $1"
+			exit 1
+			;;
 	esac
 done
 
@@ -70,20 +76,22 @@ done
 export ARCH
 
 # Configure where we can find things here
-export ANDROID_NDK_ROOT=${ANDROID_NDK_ROOT-$SUBSURFACE_SOURCE/../android-ndk-r13b}
+export ANDROID_NDK_ROOT=${ANDROID_NDK_ROOT-$SUBSURFACE_SOURCE/../${ANDROID_NDK}}
 
 if [ -n "${QT5_ANDROID+X}" ] ; then
 	echo "Using Qt5 in $QT5_ANDROID"
+elif [ -d "$SUBSURFACE_SOURCE/../Qt/${LATEST_QT}" ] ; then
+	export QT5_ANDROID=$SUBSURFACE_SOURCE/../Qt/${LATEST_QT}
+elif [ -d "$SUBSURFACE_SOURCE/../Qt/5.9.3" ] ; then
+	export QT5_ANDROID=$SUBSURFACE_SOURCE/../Qt/5.9.3
+elif [ -d "$SUBSURFACE_SOURCE/../Qt/5.9.1" ] ; then
+	export QT5_ANDROID=$SUBSURFACE_SOURCE/../Qt/5.9.1
+elif [ -d "$SUBSURFACE_SOURCE/../Qt/5.9" ] ; then
+	export QT5_ANDROID=$SUBSURFACE_SOURCE/../Qt/5.9
 elif [ -d "$SUBSURFACE_SOURCE/../Qt/5.8" ] ; then
 	export QT5_ANDROID=$SUBSURFACE_SOURCE/../Qt/5.8
-elif [ -d "$SUBSURFACE_SOURCE/../Qt/5.7" ] ; then
-	export QT5_ANDROID=$SUBSURFACE_SOURCE/../Qt/5.7
-elif [ -d "$SUBSURFACE_SOURCE/../Qt/5.6" ] ; then
-	export QT5_ANDROID=$SUBSURFACE_SOURCE/../Qt/5.6
-elif [ -d "$SUBSURFACE_SOURCE/../Qt/5.5" ] ; then
-	export QT5_ANDROID=$SUBSURFACE_SOURCE/../Qt/5.5
 else
-	echo "Cannot find Qt 5.7, 5.6 or 5.5 under $SUBSURFACE_SOURCE/../Qt"
+	echo "Cannot find Qt 5.8 or newer under $SUBSURFACE_SOURCE/../Qt"
 	exit 1
 fi
 
@@ -92,18 +100,8 @@ if [ "$PLATFORM" = "Darwin" ] ; then
 	export ANDROID_NDK_HOST=darwin-x86_64
 else
 	export ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT-$SUBSURFACE_SOURCE/../android-sdk-linux}
-	export ANDROID_NDK_HOST=linux-x86
+	export ANDROID_NDK_HOST=linux-x86_64
 fi
-
-# Which versions are we building against?
-SQLITE_VERSION=3130000
-LIBXML2_VERSION=2.9.4
-LIBXSLT_VERSION=1.1.29
-LIBZIP_VERSION=1.1.3
-LIBGIT2_VERSION=0.24.1
-LIBUSB_VERSION=1.0.20
-OPENSSL_VERSION=1.0.2h
-LIBFTDI_VERSION=1.3
 
 if [ "$ARCH" = "arm" ] ; then
 	QT_ARCH=armv7
@@ -114,7 +112,18 @@ elif [ "$ARCH" = "x86" ] ; then
 	BUILDCHAIN=i686-linux-android
 	OPENSSL_MACHINE=i686
 fi
-export QT5_ANDROID_BIN=${QT5_ANDROID}/android_${QT_ARCH}/bin
+
+# Verify Qt install and adjust for single-arch Qt install layout
+# (e.g. when building Qt from scratch)
+export QT5_ANDROID_CMAKE
+if [ -d "${QT5_ANDROID}/android_${QT_ARCH}/lib/cmake" ] ; then
+	export QT5_ANDROID_CMAKE=$QT5_ANDROID/android_${QT_ARCH}/lib/cmake
+elif [ -d "${QT5_ANDROID}/lib/cmake" ] ; then
+	export QT5_ANDROID_CMAKE=$QT5_ANDROID/lib/cmake
+else
+	echo "Cannot find Qt cmake configuration"
+	exit 1
+fi
 
 if [ ! -e ndk-"$ARCH" ] ; then
 	"$ANDROID_NDK_ROOT/build/tools/make_standalone_toolchain.py" --arch="$ARCH" --install-dir=ndk-"$ARCH" --api=16
@@ -139,31 +148,50 @@ else
 	export JAVA_HOME=/usr
 fi
 
-if [ ! -e sqlite-autoconf-${SQLITE_VERSION}.tar.gz ] ; then
-	wget http://www.sqlite.org/2016/sqlite-autoconf-${SQLITE_VERSION}.tar.gz
+# find qmake
+QMAKE=$QT5_ANDROID/android_armv7/bin/qmake
+$QMAKE -query
+
+# build google maps plugin
+"${SUBSURFACE_SOURCE}"/scripts/get-dep-lib.sh singleAndroid . googlemaps
+# find qmake
+QMAKE=$QT5_ANDROID/android_armv7/bin/qmake
+$QMAKE -query
+QT_PLUGINS_PATH=$($QMAKE -query QT_INSTALL_PLUGINS)
+GOOGLEMAPS_BIN=libqtgeoservices_googlemaps.so
+if [ ! -e "$QT_PLUGINS_PATH"/geoservices/$GOOGLEMAPS_BIN ] || [ googlemaps/.git/HEAD -nt "$QT_PLUGINS_PATH"/geoservices/$GOOGLEMAPS_BIN ] ; then
+    mkdir -p googlemaps-build-"$ARCH"
+    pushd googlemaps-build-"$ARCH"
+    $QMAKE ../googlemaps/googlemaps.pro
+    # on Travis the compiler doesn't support c++1z, yet qmake adds that flag;
+    # since things compile fine with c++11, let's just hack that away
+    # similarly, don't use -Wdata-time
+    sed -i.bak -e 's/std=c++1z/std=c++11/g ; s/-Wdate-time//' Makefile
+    make -j4
+    $QMAKE -install qinstall -exe $GOOGLEMAPS_BIN "$QT_PLUGINS_PATH"/geoservices/$GOOGLEMAPS_BIN
+    popd
 fi
-if [ ! -e sqlite-autoconf-${SQLITE_VERSION} ] ; then
-	tar -zxf sqlite-autoconf-${SQLITE_VERSION}.tar.gz
-fi
+
+"${SUBSURFACE_SOURCE}"/scripts/get-dep-lib.sh singleAndroid . sqlite
 if [ ! -e "$PKG_CONFIG_LIBDIR/sqlite3.pc" ] ; then
 	mkdir -p sqlite-build-"$ARCH"
 	pushd sqlite-build-"$ARCH"
-	../sqlite-autoconf-${SQLITE_VERSION}/configure --host=${BUILDCHAIN} --prefix="$PREFIX" --enable-static --disable-shared
+	../sqlite/configure --host=${BUILDCHAIN} --prefix="$PREFIX" --enable-static --disable-shared
 	make
 	make install
 	popd
 fi
 
-if [ ! -e libxml2-${LIBXML2_VERSION}.tar.gz ] ; then
-	wget ftp://xmlsoft.org/libxml2/libxml2-${LIBXML2_VERSION}.tar.gz
-fi
-if [ ! -e libxml2-${LIBXML2_VERSION} ] ; then
-	tar -zxf libxml2-${LIBXML2_VERSION}.tar.gz
+"${SUBSURFACE_SOURCE}"/scripts/get-dep-lib.sh singleAndroid . libxml2
+if [ ! -e libxml2/configure ] ; then
+	pushd libxml2
+	autoreconf --install
+	popd
 fi
 if [ ! -e "$PKG_CONFIG_LIBDIR/libxml-2.0.pc" ] ; then
 	mkdir -p libxml2-build-"$ARCH"
 	pushd libxml2-build-"$ARCH"
-	../libxml2-${LIBXML2_VERSION}/configure --host=${BUILDCHAIN} --prefix="$PREFIX" --without-python --without-iconv --enable-static --disable-shared
+	../libxml2/configure --host=${BUILDCHAIN} --prefix="$PREFIX" --without-python --without-iconv --enable-static --disable-shared
 	perl -pi -e 's/runtest\$\(EXEEXT\)//' Makefile
 	perl -pi -e 's/testrecurse\$\(EXEEXT\)//' Makefile
 	make
@@ -171,44 +199,34 @@ if [ ! -e "$PKG_CONFIG_LIBDIR/libxml-2.0.pc" ] ; then
 	popd
 fi
 
-if [ ! -e libxslt-${LIBXSLT_VERSION}.tar.gz ] ; then
-	wget ftp://xmlsoft.org/libxml2/libxslt-${LIBXSLT_VERSION}.tar.gz
-fi
-if [ ! -e libxslt-${LIBXSLT_VERSION} ] ; then
-	tar -zxf libxslt-${LIBXSLT_VERSION}.tar.gz
-	# libxslt have too old config.sub for android
-	cp libxml2-${LIBXML2_VERSION}/config.sub libxslt-${LIBXSLT_VERSION}
+"${SUBSURFACE_SOURCE}"/scripts/get-dep-lib.sh singleAndroid . libxslt
+if [ ! -e libxslt/configure ] ; then
+	pushd libxslt
+	autoreconf --install
+	popd
 fi
 if [ ! -e "$PKG_CONFIG_LIBDIR/libxslt.pc" ] ; then
 	mkdir -p libxslt-build-"$ARCH"
 	pushd libxslt-build-"$ARCH"
-	../libxslt-${LIBXSLT_VERSION}/configure --host=${BUILDCHAIN} --prefix="$PREFIX" --with-libxml-prefix="$PREFIX" --without-python --without-crypto --enable-static --disable-shared
+	../libxslt/configure --host=${BUILDCHAIN} --prefix="$PREFIX" --with-libxml-prefix="$PREFIX" --without-python --without-crypto --enable-static --disable-shared
 	make
 	make install
 	popd
 fi
 
-if [ ! -e libzip-${LIBZIP_VERSION}.tar.gz ] ; then
-	wget http://www.nih.at/libzip/libzip-${LIBZIP_VERSION}.tar.gz
-fi
-if [ ! -e libzip-${LIBZIP_VERSION} ] ; then
-	tar -zxf libzip-${LIBZIP_VERSION}.tar.gz
-fi
+"${SUBSURFACE_SOURCE}"/scripts/get-dep-lib.sh singleAndroid . libzip
 if [ ! -e "$PKG_CONFIG_LIBDIR/libzip.pc" ] ; then
 	mkdir -p libzip-build-"$ARCH"
 	pushd libzip-build-"$ARCH"
-	../libzip-${LIBZIP_VERSION}/configure --host=${BUILDCHAIN} --prefix="$PREFIX" --enable-static --disable-shared
+	../libzip/configure --host=${BUILDCHAIN} --prefix="$PREFIX" --enable-static --disable-shared
 	make
 	make install
 	popd
 fi
 
-if [ ! -e openssl-${OPENSSL_VERSION}.tar.gz ] ; then
-	wget -O openssl-${OPENSSL_VERSION}.tar.gz http://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz
-fi
+"${SUBSURFACE_SOURCE}"/scripts/get-dep-lib.sh singleAndroid . openssl
 if [ ! -e openssl-build-"$ARCH" ] ; then
-	tar -zxf openssl-${OPENSSL_VERSION}.tar.gz
-	mv openssl-${OPENSSL_VERSION} openssl-build-"$ARCH"
+	mv openssl openssl-build-"$ARCH"
 fi
 if [ ! -e "$PKG_CONFIG_LIBDIR/libssl.pc" ] ; then
 	pushd openssl-build-"$ARCH"
@@ -230,18 +248,15 @@ if [ ! -e "$PKG_CONFIG_LIBDIR/libssl.pc" ] ; then
 	popd
 fi
 
-if [ ! -e libgit2-${LIBGIT2_VERSION}.tar.gz ] ; then
-	wget -O libgit2-${LIBGIT2_VERSION}.tar.gz https://github.com/libgit2/libgit2/archive/v${LIBGIT2_VERSION}.tar.gz
-fi
-if [ ! -e libgit2-${LIBGIT2_VERSION} ] ; then
-	tar -zxf libgit2-${LIBGIT2_VERSION}.tar.gz
-fi
+"${SUBSURFACE_SOURCE}"/scripts/get-dep-lib.sh singleAndroid . libgit2
 if [ ! -e "$PKG_CONFIG_LIBDIR/libgit2.pc" ] ; then
 	# We don't want to find the HTTP_Parser package of the build host by mistake
-	perl -pi -e 's/FIND_PACKAGE\(HTTP_Parser\)/#FIND_PACKAGE(HTTP_Parser)/' libgit2-${LIBGIT2_VERSION}/CMakeLists.txt
+	perl -pi -e 's/FIND_PACKAGE\(HTTP_Parser\)/#FIND_PACKAGE(HTTP_Parser)/' libgit2/CMakeLists.txt
 	mkdir -p libgit2-build-"$ARCH"
 	pushd libgit2-build-"$ARCH"
-	cmake -DCMAKE_SYSTEM_NAME=Android -DSHA1_TYPE=builtin \
+	cmake \
+		-DCMAKE_C_COMPILER="$CC" \
+		-DCMAKE_LINKER="$CC" \
 		-DBUILD_CLAR=OFF -DBUILD_SHARED_LIBS=OFF \
 		-DCMAKE_INSTALL_PREFIX="$PREFIX" \
 		-DCURL=OFF \
@@ -249,8 +264,8 @@ if [ ! -e "$PKG_CONFIG_LIBDIR/libgit2.pc" ] ; then
 		-DOPENSSL_SSL_LIBRARY="$PREFIX"/lib/libssl.so \
 		-DOPENSSL_CRYPTO_LIBRARY="$PREFIX"/lib/libcrypto.so \
 		-DOPENSSL_INCLUDE_DIR="$PREFIX"/include/openssl \
-		-D_OPENSSL_VERSION=${OPENSSL_VERSION} \
-		../libgit2-${LIBGIT2_VERSION}/
+		-D_OPENSSL_VERSION="${OPENSSL_VERSION}" \
+		../libgit2/
 	make
 	make install
 	# Patch away pkg-config dependency to zlib, its there, i promise
@@ -258,20 +273,15 @@ if [ ! -e "$PKG_CONFIG_LIBDIR/libgit2.pc" ] ; then
 	popd
 fi
 
-if [ ! -e libusb-${LIBUSB_VERSION}.tar.gz ] ; then
-	wget -O libusb-${LIBUSB_VERSION}.tar.gz https://github.com/libusb/libusb/archive/v${LIBUSB_VERSION}.tar.gz
-fi
-if [ ! -e libusb-${LIBUSB_VERSION} ] ; then
-	tar -zxf libusb-${LIBUSB_VERSION}.tar.gz
-fi
-if ! grep -q libusb_set_android_open_callback libusb-${LIBUSB_VERSION}/libusb/libusb.h ; then
+"${SUBSURFACE_SOURCE}"/scripts/get-dep-lib.sh singleAndroid . libusb
+if ! grep -q libusb_set_android_open_callback libusb/libusb/libusb.h ; then
 	# Patch in our libusb callback
-	pushd libusb-${LIBUSB_VERSION}
+	pushd libusb
 	patch -p1 < "$SUBSURFACE_SOURCE"/packaging/android/patches/libusb-android.patch
 	popd
 fi
-if [ ! -e libusb-${LIBUSB_VERSION}/configure ] ; then
-	pushd libusb-${LIBUSB_VERSION}
+if [ ! -e libusb/configure ] ; then
+	pushd libusb
 	mkdir m4
 	autoreconf -i
 	popd
@@ -279,23 +289,18 @@ fi
 if [ ! -e "$PKG_CONFIG_LIBDIR/libusb-1.0.pc" ] ; then
 	mkdir -p libusb-build-"$ARCH"
 	pushd libusb-build-"$ARCH"
-	../libusb-${LIBUSB_VERSION}/configure --host=${BUILDCHAIN} --prefix="$PREFIX" --enable-static --disable-shared --disable-udev --enable-system-log
+	../libusb/configure --host=${BUILDCHAIN} --prefix="$PREFIX" --enable-static --disable-shared --disable-udev --enable-system-log
 	# --enable-debug-log
 	make
 	make install
 	popd
 fi
 
-if [ ! -e libftdi1-${LIBFTDI_VERSION}.tar.bz2 ] ; then
-	wget -O libftdi1-${LIBFTDI_VERSION}.tar.bz2 http://www.intra2net.com/en/developer/libftdi/download/libftdi1-${LIBFTDI_VERSION}.tar.bz2
-fi
-if [ ! -e libftdi1-${LIBFTDI_VERSION} ] ; then
-	tar -jxf libftdi1-${LIBFTDI_VERSION}.tar.bz2
-fi
+"${SUBSURFACE_SOURCE}"/scripts/get-dep-lib.sh singleAndroid . libftdi1
 if [ ! -e "$PKG_CONFIG_LIBDIR/libftdi1.pc" ] && [ "$PLATFORM" != "Darwin" ] ; then
 	mkdir -p libftdi1-build-"$ARCH"
 	pushd libftdi1-build-"$ARCH"
-	cmake ../libftdi1-${LIBFTDI_VERSION} -DCMAKE_C_COMPILER="$CC" -DCMAKE_INSTALL_PREFIX="$PREFIX" -DCMAKE_PREFIX_PATH="$PREFIX" -DSTATICLIBS=ON -DPYTHON_BINDINGS=OFF -DDOCUMENTATION=OFF -DFTDIPP=OFF -DBUILD_TESTS=OFF -DEXAMPLES=OFF -DFTDI_EEPROM=OFF
+	cmake ../libftdi1 -DCMAKE_C_COMPILER="$CC" -DCMAKE_INSTALL_PREFIX="$PREFIX" -DCMAKE_PREFIX_PATH="$PREFIX" -DSTATICLIBS=ON -DPYTHON_BINDINGS=OFF -DDOCUMENTATION=OFF -DFTDIPP=OFF -DBUILD_TESTS=OFF -DEXAMPLES=OFF -DFTDI_EEPROM=OFF
 	make
 	make install
 	popd
@@ -305,22 +310,31 @@ if [ -e "$PREFIX/lib/libftdi1.so" ] ; then
 	rm "$PREFIX"/lib/libftdi1.so*
 fi
 
-if [ ! -e "$PKG_CONFIG_LIBDIR/libdivecomputer.pc" ] ; then
+pushd "$SUBSURFACE_SOURCE"
+git submodule update --recursive
+popd
+CURRENT_SHA=$(cd "$SUBSURFACE_SOURCE"/libdivecomputer ; git describe)
+PREVIOUS_SHA=$(cat "libdivecomputer-${ARCH}.SHA" 2>/dev/null || echo)
+if [ ! "$CURRENT_SHA" = "$PREVIOUS_SHA" ] || [ ! -e "$PKG_CONFIG_LIBDIR/libdivecomputer.pc" ] ; then
 	mkdir -p libdivecomputer-build-"$ARCH"
 	pushd libdivecomputer-build-"$ARCH"
-	"$SUBSURFACE_SOURCE"/../libdivecomputer/configure --host=${BUILDCHAIN} --prefix="$PREFIX" --enable-static --disable-shared --enable-examples=no
+	"$SUBSURFACE_SOURCE"/libdivecomputer/configure --host=${BUILDCHAIN} --prefix="$PREFIX" --enable-static --disable-shared --enable-examples=no
 	make
 	make install
 	popd
+	echo "$CURRENT_SHA" > "libdivecomputer-${ARCH}.SHA"
 fi
 
 if [ ! -e qt-android-cmake ] ; then
-	git clone git://github.com/LaurentGomila/qt-android-cmake.git
+	git clone https://github.com/LaurentGomila/qt-android-cmake.git
 else
 	pushd qt-android-cmake
 	git pull
 	popd
 fi
+# the Qt Android cmake addon runs androiddeployqt with '--verbose' which
+# is, err, rather verbose. Let's not do that.
+sed -i -e 's/--verbose//' qt-android-cmake/AddQtAndroidApk.cmake
 
 # Should we build the mobile ui or the desktop ui?
 # doing this backwards in order not to break people's setup
@@ -340,24 +354,22 @@ if [ ! -z "$SUBSURFACE_MOBILE" ] ; then
 	mkdir -p subsurface-mobile-build-"$ARCH"
 	cd subsurface-mobile-build-"$ARCH"
 	MOBILE_CMAKE=-DSUBSURFACE_TARGET_EXECUTABLE=MobileExecutable
+	BUILD_NAME=Subsurface-mobile
 else
 	MOBILE_CMAKE=""
 	mkdir -p subsurface-build-"$ARCH"
 	cd subsurface-build-"$ARCH"
+	BUILD_NAME=Subsurface
 fi
 
-# something in the qt-android-cmake-thingies mangles your path, so thats why we need to hard-code ant and pkg-config here.
 if [ "$PLATFORM" = "Darwin" ] ; then
-	ANT=/usr/local/bin/ant
 	FTDI=OFF
 else
-	ANT=/usr/bin/ant
 	FTDI=ON
 fi
 
 PKGCONF=$(which pkg-config)
 cmake $MOBILE_CMAKE \
-	-DQT_ANDROID_ANT=${ANT} \
 	-DPKG_CONFIG_EXECUTABLE="$PKGCONF" \
 	-DQT_ANDROID_SDK_ROOT="$ANDROID_SDK_ROOT" \
 	-DQT_ANDROID_NDK_ROOT="$ANDROID_NDK_ROOT" \
@@ -366,16 +378,18 @@ cmake $MOBILE_CMAKE \
 	-DFORCE_LIBSSH=OFF \
 	-DLIBDC_FROM_PKGCONFIG=ON \
 	-DLIBGIT2_FROM_PKGCONFIG=ON \
-	-DNO_MARBLE=ON \
 	-DNO_PRINTING=ON \
 	-DNO_USERMANUAL=ON \
+	-DNO_DOCS=ON \
 	-DFBSUPPORT=OFF \
-	-DCMAKE_PREFIX_PATH:UNINITIALIZED="$QT5_ANDROID/android_$QT_ARCH/lib/cmake" \
+	-DCMAKE_PREFIX_PATH:UNINITIALIZED="$QT5_ANDROID_CMAKE" \
 	-DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
 	-DMAKE_TESTS=OFF \
 	-DFTDISUPPORT=${FTDI} \
 	-DANDROID_NATIVE_LIBSSL="$BUILDROOT/ndk-$ARCH/sysroot/usr/lib/libssl.so" \
 	-DANDROID_NATIVE_LIBCRYPT="$BUILDROOT/ndk-$ARCH/sysroot/usr/lib/libcrypto.so" \
+	-DBUILDTOOLS_REVISION="$ANDROID_BUILDTOOLS_REVISION" \
+	-DCMAKE_MAKE_PROGRAM="make" \
 	"$SUBSURFACE_SOURCE"
 
 # set up the version number
@@ -407,7 +421,4 @@ cp -a translations/*.qm assets/translations
 # now build Subsurface and use the rest of the command line arguments
 make "$@"
 
-#make install INSTALL_ROOT=android_build
-# bug in androiddeployqt? why is it looking for something with the builddir in it?
-#ln -fs android-libsubsurface.so-deployment-settings.json android-libsubsurface-build-${ARCH}.so-deployment-settings.json
-#$QT5_ANDROID_BIN/androiddeployqt --output android_build
+echo "Done building $BUILD_NAME for Android"

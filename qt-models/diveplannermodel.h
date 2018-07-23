@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #ifndef DIVEPLANNERMODEL_H
 #define DIVEPLANNERMODEL_H
 
@@ -17,6 +18,7 @@ public:
 		RUNTIME,
 		GAS,
 		CCSETPOINT,
+		DIVEMODE,
 		COLUMNS
 	};
 	enum Mode {
@@ -30,7 +32,8 @@ public:
 	virtual QVariant headerData(int section, Qt::Orientation orientation, int role = Qt::DisplayRole) const;
 	virtual bool setData(const QModelIndex &index, const QVariant &value, int role = Qt::EditRole);
 	virtual Qt::ItemFlags flags(const QModelIndex &index) const;
-	void gaschange(const QModelIndex &index, int newcylinderid);
+	void gasChange(const QModelIndex &index, int newcylinderid);
+	void cylinderRenumber(int mapping[]);
 	void removeSelectedPoints(const QVector<int> &rows);
 	void setPlanMode(Mode mode);
 	bool isPlanner();
@@ -50,19 +53,17 @@ public:
 	divedatapoint at(int row);
 	int size();
 	struct diveplan &getDiveplan();
-	QStringList &getGasList();
 	int lastEnteredPoint();
 	void removeDeco();
 	static bool addingDeco;
+	struct deco_state final_deco_state;
 
 public
 slots:
-	int addStop(int millimeters = 0, int seconds = 0, int cylinderid_in = -1, int ccpoint = 0, bool entered = true);
+	int addStop(int millimeters = 0, int seconds = 0, int cylinderid_in = -1, int ccpoint = 0, bool entered = true, enum divemode_t = UNDEF_COMP_TYPE);
 	void addCylinder_clicked();
 	void setGFHigh(const int gfhigh);
-	void triggerGFHigh();
-	void setGFLow(const int ghflow);
-	void triggerGFLow();
+	void setGFLow(const int gflow);
 	void setVpmbConservatism(int level);
 	void setSurfacePressure(int pressure);
 	void setSalinity(int salinity);
@@ -77,6 +78,7 @@ slots:
 	void setDisplayRuntime(bool value);
 	void setDisplayDuration(bool value);
 	void setDisplayTransitions(bool value);
+	void setDisplayVariations(bool value);
 	void setDecoMode(int mode);
 	void setSafetyStop(bool value);
 	void savePlan();
@@ -91,6 +93,13 @@ slots:
 	void setReserveGas(int reserve);
 	void setSwitchAtReqStop(bool value);
 	void setMinSwitchDuration(int duration);
+	void setSacFactor(double factor);
+	void setProblemSolvingTime(int minutes);
+	void setAscrate75(int rate);
+	void setAscrate50(int rate);
+	void setAscratestops(int rate);
+	void setAscratelast6m(int rate);
+	void setDescrate(int rate);
 
 signals:
 	void planCreated();
@@ -99,17 +108,21 @@ signals:
 	void startTimeChanged(QDateTime);
 	void recreationChanged(bool);
 	void calculatedPlanNotes();
+	void variationsComputed(QString);
 
 private:
 	explicit DivePlannerPointsModel(QObject *parent = 0);
 	void createPlan(bool replanCopy);
 	struct diveplan diveplan;
+	struct divedatapoint *cloneDiveplan(struct diveplan *plan_src, struct diveplan *plan_copy);
+	void computeVariations(struct diveplan *diveplan, struct deco_state *ds);
+	int analyzeVariations(struct decostop *min, struct decostop *mid, struct decostop *max, const char *unit);
 	Mode mode;
 	bool recalc;
 	QVector<divedatapoint> divepoints;
 	QDateTime startTime;
-	int tempGFHigh;
-	int tempGFLow;
+	int instanceCounter = 0;
+	struct deco_state ds_after_previous_dives;
 };
 
 #endif

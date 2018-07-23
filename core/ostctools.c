@@ -1,8 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "dive.h"
+#include "subsurface-string.h"
 #include "gettext.h"
 #include "divelist.h"
 #include "libdivecomputer.h"
@@ -42,38 +44,69 @@ void ostctools_import(const char *file, struct dive_table *divetable)
 	char *tmp;
 	struct dive *ostcdive = alloc_dive();
 	dc_status_t rc = 0;
-	int model, ret, i = 0;
+	int model, ret, i = 0, c;
 	unsigned int serial;
 	struct extra_data *ptr;
+	const char *failed_to_read_msg = translate("gettextFromC", "Failed to read '%s'");
 
 	// Open the archive
 	if ((archive = subsurface_fopen(file, "rb")) == NULL) {
-		report_error(translate("gettextFromC", "Failed to read '%s'"), file);
+		report_error(failed_to_read_msg, file);
 		free(ostcdive);
 		goto out;
 	}
 
 	// Read dive number from the log
 	uc_tmp = calloc(2, 1);
-	fseek(archive, 258, 0);
-	fread(uc_tmp, 1, 2, archive);
+	if (fseek(archive, 258, 0) == -1) {
+		report_error(failed_to_read_msg, file);
+		free(uc_tmp);
+		free(ostcdive);
+		goto close_out;
+	}
+	if (fread(uc_tmp, 1, 2, archive) != 2) {
+		report_error(failed_to_read_msg, file);
+		free(uc_tmp);
+		free(ostcdive);
+		goto close_out;
+	}
 	ostcdive->number = uc_tmp[0] + (uc_tmp[1] << 8);
 	free(uc_tmp);
 
 	// Read device's serial number
 	uc_tmp = calloc(2, 1);
-	fseek(archive, 265, 0);
-	fread(uc_tmp, 1, 2, archive);
+	if (fseek(archive, 265, 0) == -1) {
+		report_error(failed_to_read_msg, file);
+		free(uc_tmp);
+		free(ostcdive);
+		goto close_out;
+	}
+	if (fread(uc_tmp, 1, 2, archive) != 2) {
+		report_error(failed_to_read_msg, file);
+		free(uc_tmp);
+		free(ostcdive);
+		goto close_out;
+	}
 	serial = uc_tmp[0] + (uc_tmp[1] << 8);
 	free(uc_tmp);
 
 	// Read dive's raw data, header + profile
-	fseek(archive, 456, 0);
-	while (!feof(archive)) {
-		fread(buffer + i, 1, 1, archive);
+	if (fseek(archive, 456, 0) == -1) {
+		report_error(failed_to_read_msg, file);
+		free(uc_tmp);
+		free(ostcdive);
+		goto close_out;
+	}
+	while ((c = getc(archive)) != EOF) {
+		buffer[i] = c;
 		if (buffer[i] == 0xFD && buffer[i - 1] == 0xFD)
 			break;
 		i++;
+	}
+	if (ferror(archive)) {
+		report_error(failed_to_read_msg, file);
+		free(ostcdive);
+		goto close_out;
 	}
 
 	// Try to determine the dc family based on the header type
@@ -91,8 +124,7 @@ void ostctools_import(const char *file, struct dive_table *divetable)
 		default:
 			report_error(translate("gettextFromC", "Unknown DC in dive %d"), ostcdive->number);
 			free(ostcdive);
-			fclose(archive);
-			goto out;
+			goto close_out;
 		}
 	}
 
@@ -123,8 +155,7 @@ void ostctools_import(const char *file, struct dive_table *divetable)
 	if (ret == 0) {
 		report_error(translate("gettextFromC", "Unknown DC in dive %d"), ostcdive->number);
 		free(ostcdive);
-		fclose(archive);
-		goto out;
+		goto close_out;
 	}
 	tmp = calloc(strlen(devdata->vendor) + strlen(devdata->model) + 28, 1);
 	sprintf(tmp, "%s %s (Imported from OSTCTools)", devdata->vendor, devdata->model);
@@ -158,6 +189,8 @@ void ostctools_import(const char *file, struct dive_table *divetable)
 	record_dive_to_table(ostcdive, divetable);
 	mark_divelist_changed(true);
 	sort_table(divetable);
+
+close_out:
 	fclose(archive);
 out:
 	free(devdata);

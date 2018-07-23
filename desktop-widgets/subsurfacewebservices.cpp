@@ -1,16 +1,18 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "desktop-widgets/subsurfacewebservices.h"
-#include "core/helpers.h"
+#include "core/qthelper.h"
 #include "core/webservice.h"
+#include "core/settings/qPref.h"
 #include "desktop-widgets/mainwindow.h"
 #include "desktop-widgets/usersurvey.h"
 #include "core/divelist.h"
-#include "desktop-widgets/globe.h"
-#include "desktop-widgets/maintab.h"
+#include "desktop-widgets/mapwidget.h"
+#include "desktop-widgets/tab-widgets/maintab.h"
 #include "core/display.h"
 #include "core/membuffer.h"
-#include "core/subsurface-qt/SettingsObjectWrapper.h"
 #include <errno.h>
 #include "core/cloudstorage.h"
+#include "core/subsurface-string.h"
 
 #include <QDir>
 #include <QHttpMultiPart>
@@ -53,6 +55,13 @@ static void copy_gps_location(struct dive *from, struct dive *to)
 }
 
 #define SAME_GROUP 6 * 3600 // six hours
+#define SET_LOCATION(_dive, _gpsfix, _mark) \
+{                                           \
+	copy_gps_location(_gpsfix, _dive);  \
+	changed ++;                         \
+	tracer = _mark;                     \
+}
+
 //TODO: C Code. static functions are not good if we plan to have a test for them.
 static bool merge_locations_into_dives(void)
 {
@@ -69,7 +78,7 @@ static bool merge_locations_into_dives(void)
 						qDebug() << "processing gpsfix @" << get_dive_date_string(gpsfix->when) <<
 							    "which is withing six hours of dive from" <<
 							    get_dive_date_string(dive->when) << "until" <<
-							    get_dive_date_string(dive->when + dive->duration.seconds);
+							    get_dive_date_string(dive_endtime(dive));
 					/*
 					 * If position is fixed during dive. This is the good one.
 					 * Asign and mark position, and end gps_location loop
@@ -77,9 +86,7 @@ static bool merge_locations_into_dives(void)
 					if (time_during_dive_with_offset(dive, gpsfix->when, 0)) {
 						if (verbose)
 							qDebug() << "gpsfix is during the dive, pick that one";
-						copy_gps_location(gpsfix, dive);
-						changed++;
-						tracer = j;
+						SET_LOCATION(dive, gpsfix, j);
 						break;
 					} else {
 						/*
@@ -89,15 +96,6 @@ static bool merge_locations_into_dives(void)
 						    time_during_dive_with_offset(dive, nextgpsfix->when, SAME_GROUP)) {
 							if (verbose)
 								qDebug() << "look at the next gps fix @" << get_dive_date_string(nextgpsfix->when);
-							/* first let's test if this one is during the dive */
-							if (time_during_dive_with_offset(dive, nextgpsfix->when, 0)) {
-								if (verbose)
-									qDebug() << "which is during the dive, pick that one";
-								copy_gps_location(nextgpsfix, dive);
-								changed++;
-								tracer = j + 1;
-								break;
-							}
 							/* we know the gps fixes are sorted; if they are both before the dive, ignore the first,
 							 * if theay are both after the dive, take the first,
 							 * if the first is before and the second is after, take the closer one */
@@ -105,28 +103,22 @@ static bool merge_locations_into_dives(void)
 								if (verbose)
 									qDebug() << "which is closer to the start of the dive, do continue with that";
 								continue;
-							} else if (gpsfix->when > dive->when + dive->duration.seconds) {
+							} else if (gpsfix->when > dive_endtime(dive)) {
 								if (verbose)
 									qDebug() << "which is even later after the end of the dive, so pick the previous one";
-								copy_gps_location(gpsfix, dive);
-								changed++;
-								tracer = j;
+								SET_LOCATION(dive, gpsfix, j);
 								break;
 							} else {
 								/* ok, gpsfix is before, nextgpsfix is after */
-								if (dive->when - gpsfix->when <= nextgpsfix->when - (dive->when + dive->duration.seconds)) {
+								if (dive->when - gpsfix->when <= nextgpsfix->when - dive_endtime(dive)) {
 									if (verbose)
 										qDebug() << "pick the one before as it's closer to the start";
-									copy_gps_location(gpsfix, dive);
-									changed++;
-									tracer = j;
+									SET_LOCATION(dive, gpsfix, j);
 									break;
 								} else {
 									if (verbose)
 										qDebug() << "pick the one after as it's closer to the start";
-									copy_gps_location(nextgpsfix, dive);
-									changed++;
-									tracer = j + 1;
+									SET_LOCATION(dive, nextgpsfix, j + 1);
 									break;
 								}
 							}
@@ -136,9 +128,7 @@ static bool merge_locations_into_dives(void)
 						} else {
 							if (verbose)
 								qDebug() << "which seems to be the best one for this dive, so pick it";
-							copy_gps_location(gpsfix, dive);
-							changed++;
-							tracer = j;
+							SET_LOCATION(dive, gpsfix, j);
 							break;
 						}
 					}
@@ -146,7 +136,7 @@ static bool merge_locations_into_dives(void)
 					/* If position is out of SAME_GROUP range and in the future, mark position for
 					 * next dive iteration and end the gps_location loop
 					 */
-					if (gpsfix->when >= dive->when + dive->duration.seconds + SAME_GROUP) {
+					if (gpsfix->when >= dive_endtime(dive) + SAME_GROUP) {
 						tracer = j;
 						break;
 					}
@@ -216,7 +206,19 @@ bool DivelogsDeWebServices::prepare_dives_for_divelogs(const QString &tempfile, 
 				put_degrees(&mb, ds->latitude, " gps='", " ");
 				put_degrees(&mb, ds->longitude, "", "'");
 			}
-			put_format(&mb, "/>\n</divesites>\n");
+			put_format(&mb, ">\n");
+			if (ds->taxonomy.nr) {
+				for (int j = 0; j < ds->taxonomy.nr; j++) {
+					struct taxonomy *t = &ds->taxonomy.category[j];
+					if (t->category != TC_NONE && t->category == prefs.geocoding.category[j] && t->value) {
+						put_format(&mb, "  <geo cat='%d'", t->category);
+						put_format(&mb, " origin='%d' value='", t->origin);
+						put_quoted(&mb, t->value, 1, 0);
+						put_format(&mb, "'/>\n");
+					}
+				}
+			}
+			put_format(&mb, "</site>\n</divesites>\n");
 		}
 
 		save_one_dive_to_mb(&mb, dive);
@@ -237,7 +239,7 @@ bool DivelogsDeWebServices::prepare_dives_for_divelogs(const QString &tempfile, 
 			report_error(tr("internal error").toUtf8());
 			goto error_close_zip;
 		}
-		free((void *)membuf);
+		free_buffer(&mb);
 
 		transformed = xsltApplyStylesheet(xslt, doc, NULL);
 		if (!transformed) {
@@ -384,8 +386,9 @@ SubsurfaceWebServices::SubsurfaceWebServices(QWidget *parent, Qt::WindowFlags f)
 	QString userid(prefs.userid);
 
 	if (userid.isEmpty() &&
-	    !same_string(prefs.cloud_storage_email, "") &&
-	    !same_string(prefs.cloud_storage_password, ""))
+	    !empty_string(prefs.cloud_storage_email) &&
+	    !empty_string(prefs.cloud_storage_password) &&
+	    GpsLocation::hasInstance())
 		userid = GpsLocation::instance()->getUserid(prefs.cloud_storage_email, prefs.cloud_storage_password);
 
 	ui.userID->setText(userid);
@@ -412,9 +415,8 @@ void SubsurfaceWebServices::buttonClicked(QAbstractButton *button)
 		struct dive *d;
 		struct dive_site *ds;
 		bool changed = false;
-		(void)changed;
 		clear_table(&gps_location_table);
-		QByteArray url = tr("Webservice").toLocal8Bit();
+		QByteArray url = tr("Webservice").toUtf8();
 		parse_xml_buffer(url.data(), downloadedData.data(), downloadedData.length(), &gps_location_table, NULL);
 		// make sure we mark all the dive sites that were created
 		for (i = 0; i < gps_location_table.nr; i++) {
@@ -434,9 +436,9 @@ void SubsurfaceWebServices::buttonClicked(QAbstractButton *button)
 		QSettings s;
 		QString qDialogUid = ui.userID->text().toUpper();
 		bool qSaveUid = ui.saveUidLocal->checkState();
-		SettingsObjectWrapper::instance()->cloud_storage->setSaveUserIdLocal(qSaveUid);
+		qPrefCloudStorage::instance()->set_save_userid_local(qSaveUid);
 
-                //WARN: Dirk, this seems to be wrong, I coundn't really understand the code.
+		//WARN: Dirk, this seems to be wrong, I coundn't really understand the code.
 		if (qSaveUid) {
 			QString qSettingUid = s.value("subsurface_webservice_uid").toString();
 			QString qFileUid = QString(prefs.userid);
@@ -444,9 +446,7 @@ void SubsurfaceWebServices::buttonClicked(QAbstractButton *button)
 			bool d_eq_f = (qDialogUid == qFileUid);
 			if (!d_eq_f || s_eq_d)
 				s.setValue("subsurface_webservice_uid", qDialogUid);
-			set_userid(qDialogUid.toLocal8Bit().data());
-		} else {
-			s.setValue("subsurface_webservice_uid", qDialogUid);
+			set_userid(qPrintable(qDialogUid));
 		}
 		s.sync();
 		hide();
@@ -464,14 +464,12 @@ void SubsurfaceWebServices::buttonClicked(QAbstractButton *button)
 				i--; // otherwise we skip one site
 			}
 		}
-#ifndef NO_MARBLE
 		// finally now that all the extra GPS fixes that weren't used have been deleted
-		// we can update the globe
+		// we can update the map
 		if (changed) {
-			GlobeGPS::instance()->repopulateLabels();
-			GlobeGPS::instance()->centerOnDiveSite(get_dive_site_by_uuid(current_dive->dive_site_uuid));
+			MapWidget::instance()->repopulateLabels();
+			MapWidget::instance()->centerOnDiveSite(get_dive_site_by_uuid(current_dive->dive_site_uuid));
 		}
-#endif
 
 	} break;
 	case QDialogButtonBox::RejectRole:
@@ -483,7 +481,7 @@ void SubsurfaceWebServices::buttonClicked(QAbstractButton *button)
 		resetState();
 		break;
 	case QDialogButtonBox::HelpRole:
-		QDesktopServices::openUrl(QUrl("http://api.hohndel.org"));
+		QDesktopServices::openUrl(QUrl("http://api.subsurface-divelog.org"));
 		break;
 	default:
 		break;
@@ -492,7 +490,7 @@ void SubsurfaceWebServices::buttonClicked(QAbstractButton *button)
 
 void SubsurfaceWebServices::startDownload()
 {
-	QUrl url("http://api.hohndel.org/api/dive/get/");
+	QUrl url("http://api.subsurface-divelog.org/api/dive/get/");
 	QUrlQuery query;
 	query.addQueryItem("login", ui.userID->text().toUpper());
 	url.setQuery(query);
@@ -622,7 +620,7 @@ static DiveListResult parseDiveLogsDeDiveList(const QByteArray &xmlData)
 	 * </DiveDateReader>
 	 */
 	QXmlStreamReader reader(xmlData);
-	const QString invalidXmlError = QObject::tr("Invalid response from server");
+	const QString invalidXmlError = gettextFromC::tr("Invalid response from server");
 	bool seenDiveDates = false;
 	DiveListResult result;
 	result.idCount = 0;
@@ -630,7 +628,7 @@ static DiveListResult parseDiveLogsDeDiveList(const QByteArray &xmlData)
 	if (reader.readNextStartElement() && reader.name() != "DiveDateReader") {
 		result.errorCondition = invalidXmlError;
 		result.errorDetails =
-			QObject::tr("Expected XML tag 'DiveDateReader', got instead '%1")
+			gettextFromC::tr("Expected XML tag 'DiveDateReader', got instead '%1")
 				.arg(reader.name().toString());
 		goto out;
 	}
@@ -676,14 +674,14 @@ static DiveListResult parseDiveLogsDeDiveList(const QByteArray &xmlData)
 
 	if (!seenDiveDates) {
 		result.errorCondition = invalidXmlError;
-		result.errorDetails = QObject::tr("Expected XML tag 'DiveDates' not found");
+		result.errorDetails = gettextFromC::tr("Expected XML tag 'DiveDates' not found");
 	}
 
 out:
 	if (reader.hasError()) {
 		// if there was an XML error, overwrite the result or other error conditions
 		result.errorCondition = invalidXmlError;
-		result.errorDetails = QObject::tr("Malformed XML response. Line %1: %2")
+		result.errorDetails = gettextFromC::tr("Malformed XML response. Line %1: %2")
 						.arg(reader.lineNumber())
 						.arg(reader.errorString());
 	}
@@ -693,7 +691,6 @@ out:
 DivelogsDeWebServices *DivelogsDeWebServices::instance()
 {
 	static DivelogsDeWebServices *self = new DivelogsDeWebServices(MainWindow::instance());
-	self->setAttribute(Qt::WA_QuitOnClose, false);
 	return self;
 }
 
@@ -722,7 +719,6 @@ void DivelogsDeWebServices::prepareDivesForUpload(bool selected)
 	} else {
 		report_error("Failed to create upload file %s\n", qPrintable(filename));
 	}
-	MainWindow::instance()->getNotificationWidget()->showNotification(get_error_string(), KMessageWidget::Error);
 }
 
 void DivelogsDeWebServices::uploadDives(QIODevice *dldContent)
@@ -960,9 +956,8 @@ void DivelogsDeWebServices::uploadFinished()
 	}
 }
 
-void DivelogsDeWebServices::setStatusText(int status)
+void DivelogsDeWebServices::setStatusText(int)
 {
-	Q_UNUSED(status)
 }
 
 void DivelogsDeWebServices::downloadError(QNetworkReply::NetworkError)

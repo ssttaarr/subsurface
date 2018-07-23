@@ -1,8 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0
+#ifdef __clang__
 // Clang has a bug on zero-initialization of C structs.
 #pragma clang diagnostic ignored "-Wmissing-field-initializers"
+#endif
 
 #include "save-html.h"
-#include "qthelperfromc.h"
+#include "qthelper.h"
 #include "gettext.h"
 #include "stdio.h"
 
@@ -127,7 +130,7 @@ static void put_cylinder_HTML(struct membuffer *b, struct dive *dive)
 		if (cylinder->type.size.mliter) {
 			int volume = cylinder->type.size.mliter;
 			if (prefs.units.volume == CUFT && cylinder->type.workingpressure.mbar)
-				volume *= bar_to_atm(cylinder->type.workingpressure.mbar / 1000.0);
+				volume = lrint(volume * bar_to_atm(cylinder->type.workingpressure.mbar / 1000.0));
 			put_HTML_volume_units(b, volume, "\"Size\":\"", " \", ");
 		} else {
 			write_attribute(b, "Size", "--", ", ");
@@ -172,7 +175,7 @@ void put_HTML_samples(struct membuffer *b, struct dive *dive)
 
 	char *separator = "\"samples\":[";
 	for (i = 0; i < dive->dc.samples; i++) {
-		put_format(b, "%s[%d,%d,%d,%d]", separator, s->time.seconds, s->depth.mm, s->cylinderpressure.mbar, s->temperature.mkelvin);
+		put_format(b, "%s[%d,%d,%d,%d]", separator, s->time.seconds, s->depth.mm, s->pressure[0].mbar, s->temperature.mkelvin);
 		separator = ", ";
 		s++;
 	}
@@ -432,17 +435,17 @@ void write_trips(struct membuffer *b, const char *photos_dir, bool selected_only
 	char *sep = &sep_;
 
 	for (trip = dive_trip_list; trip != NULL; trip = trip->next)
-		trip->index = 0;
+		trip->saved = 0;
 
 	for_each_dive (i, dive) {
 		trip = dive->divetrip;
 
 		/*Continue if the dive have no trips or we have seen this trip before*/
-		if (!trip || trip->index)
+		if (!trip || trip->saved)
 			continue;
 
 		/* We haven't seen this trip before - save it and all dives */
-		trip->index = 1;
+		trip->saved = 1;
 		write_trip(b, trip, &dive_no, selected_only, photos_dir, list_only, sep);
 	}
 
@@ -528,7 +531,7 @@ void export_translation(const char *file_name)
 	write_attribute(b, "Back_to_List", translate("gettextFromC", "Back to list"), ", ");
 
 	//dive detailed view
-	write_attribute(b, "Dive_No", translate("gettextFromC", "Dive No."), ", ");
+	write_attribute(b, "Dive_No", translate("gettextFromC", "Dive #"), ", ");
 	write_attribute(b, "Dive_profile", translate("gettextFromC", "Dive profile"), ", ");
 	write_attribute(b, "Dive_information", translate("gettextFromC", "Dive information"), ", ");
 	write_attribute(b, "Dive_equipment", translate("gettextFromC", "Dive equipment"), ", ");

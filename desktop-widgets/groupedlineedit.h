@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (c) 2013 Maximilian Güntner <maximilian.guentner@gmail.com>
  *
@@ -53,7 +54,6 @@ public:
 	QStringList getBlockStringList();
 
 	void addColor(QColor color);
-	void removeAllColors();
 
 	virtual QSize sizeHint() const;
 	virtual QSize minimumSizeHint() const;

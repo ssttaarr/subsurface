@@ -1,5 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0
+#ifdef __clang__
 // Clang has a bug on zero-initialization of C structs.
 #pragma clang diagnostic ignored "-Wmissing-field-initializers"
+#endif
 
 /* equipment.c */
 #include <stdio.h>
@@ -21,11 +24,11 @@ void add_cylinder_description(cylinder_type_t *type)
 	desc = type->description;
 	if (!desc)
 		return;
-	for (i = 0; i < 100 && tank_info[i].name != NULL; i++) {
+	for (i = 0; i < MAX_TANK_INFO && tank_info[i].name != NULL; i++) {
 		if (strcmp(tank_info[i].name, desc) == 0)
 			return;
 	}
-	if (i < 100) {
+	if (i < MAX_TANK_INFO) {
 		// FIXME: leaked on exit
 		tank_info[i].name = strdup(desc);
 		tank_info[i].ml = type->size.mliter;
@@ -40,13 +43,13 @@ void add_weightsystem_description(weightsystem_t *weightsystem)
 	desc = weightsystem->description;
 	if (!desc)
 		return;
-	for (i = 0; i < 100 && ws_info[i].name != NULL; i++) {
+	for (i = 0; i < MAX_WS_INFO && ws_info[i].name != NULL; i++) {
 		if (strcmp(ws_info[i].name, desc) == 0) {
 			ws_info[i].grams = weightsystem->weight.grams;
 			return;
 		}
 	}
-	if (i < 100) {
+	if (i < MAX_WS_INFO) {
 		// FIXME: leaked on exit
 		ws_info[i].name = strdup(desc);
 		ws_info[i].grams = weightsystem->weight.grams;
@@ -106,26 +109,8 @@ bool weightsystem_none(void *_data)
 
 bool no_weightsystems(weightsystem_t *ws)
 {
-	int i;
-
-	for (i = 0; i < MAX_WEIGHTSYSTEMS; i++)
+	for (int i = 0; i < MAX_WEIGHTSYSTEMS; i++)
 		if (!weightsystem_none(ws + i))
-			return false;
-	return true;
-}
-
-static bool one_weightsystem_equal(weightsystem_t *ws1, weightsystem_t *ws2)
-{
-	return ws1->weight.grams == ws2->weight.grams &&
-	       same_string(ws1->description, ws2->description);
-}
-
-bool weightsystems_equal(weightsystem_t *ws1, weightsystem_t *ws2)
-{
-	int i;
-
-	for (i = 0; i < MAX_WEIGHTSYSTEMS; i++)
-		if (!one_weightsystem_equal(ws1 + i, ws2 + i))
 			return false;
 	return true;
 }
@@ -135,7 +120,7 @@ bool weightsystems_equal(weightsystem_t *ws1, weightsystem_t *ws2)
  * we should pick up any other names from the dive
  * logs directly.
  */
-struct tank_info_t tank_info[100] = {
+struct tank_info_t tank_info[MAX_TANK_INFO] = {
 	/* Need an empty entry for the no-cylinder case */
 	{ "", },
 
@@ -171,6 +156,8 @@ struct tank_info_t tank_info[100] = {
 	/* Common European steel cylinders */
 	{ "3ℓ 232 bar", .ml = 3000, .bar = 232 },
 	{ "3ℓ 300 bar", .ml = 3000, .bar = 300 },
+	{ "10ℓ 200 bar", .ml = 10000, .bar = 200 },
+	{ "10ℓ 232 bar", .ml = 10000, .bar = 232 },
 	{ "10ℓ 300 bar", .ml = 10000, .bar = 300 },
 	{ "12ℓ 200 bar", .ml = 12000, .bar = 200 },
 	{ "12ℓ 232 bar", .ml = 12000, .bar = 232 },
@@ -194,11 +181,11 @@ struct tank_info_t tank_info[100] = {
  * We hardcode the most common weight system types
  * This is a bit odd as the weight system types don't usually encode weight
  */
-struct ws_info_t ws_info[100] = {
+struct ws_info_t ws_info[MAX_WS_INFO] = {
 	{ QT_TRANSLATE_NOOP("gettextFromC", "integrated"), 0 },
 	{ QT_TRANSLATE_NOOP("gettextFromC", "belt"), 0 },
 	{ QT_TRANSLATE_NOOP("gettextFromC", "ankle"), 0 },
-	{ QT_TRANSLATE_NOOP("gettextFromC", "backplate weight"), 0 },
+	{ QT_TRANSLATE_NOOP("gettextFromC", "backplate"), 0 },
 	{ QT_TRANSLATE_NOOP("gettextFromC", "clip-on"), 0 },
 };
 
@@ -222,10 +209,9 @@ void remove_weightsystem(struct dive *dive, int idx)
  * and if we are tracking gas consumption the pressures need to be reset to start = end = workingpressure */
 void reset_cylinders(struct dive *dive, bool track_gas)
 {
-	int i;
 	pressure_t decopo2 = {.mbar = prefs.decopo2};
 
-	for (i = 0; i < MAX_CYLINDERS; i++) {
+	for (int i = 0; i < MAX_CYLINDERS; i++) {
 		cylinder_t *cyl = &dive->cylinder[i];
 		if (cylinder_none(cyl))
 			continue;
@@ -237,3 +223,24 @@ void reset_cylinders(struct dive *dive, bool track_gas)
 		cyl->deco_gas_used.mliter = 0;
 	}
 }
+
+#ifdef DEBUG_CYL
+void dump_cylinders(struct dive *dive, bool verbose)
+{
+	printf("Cylinder list:\n");
+	for (int i = 0; i < MAX_CYLINDERS; i++) {
+		cylinder_t *cyl = &dive->cylinder[i];
+
+		printf("%02d: Type     %s, %3.1fl, %3.0fbar\n", i, cyl->type.description, cyl->type.size.mliter / 1000.0, cyl->type.workingpressure.mbar / 1000.0);
+		printf("    Gasmix   O2 %2.0f%% He %2.0f%%\n", cyl->gasmix.o2.permille / 10.0, cyl->gasmix.he.permille / 10.0);
+		printf("    Pressure Start %3.0fbar End %3.0fbar Sample start %3.0fbar Sample end %3.0fbar\n", cyl->start.mbar / 1000.0, cyl->end.mbar / 1000.0, cyl->sample_start.mbar / 1000.0, cyl->sample_end.mbar / 1000.0);
+		if (verbose) {
+			printf("    Depth    %3.0fm\n", cyl->depth.mm / 1000.0);
+			printf("    Added    %s\n", (cyl->manually_added ? "manually" : ""));
+			printf("    Gas used Bottom %5.0fl Deco %5.0fl\n", cyl->gas_used.mliter / 1000.0, cyl->deco_gas_used.mliter / 1000.0);
+			printf("    Use      %d\n", cyl->cylinder_use);
+			printf("    Bestmix  %s %s\n", (cyl->bestmix_o2 ? "O2" : "  "), (cyl->bestmix_he ? "He" : "  "));
+		}
+	}
+}
+#endif

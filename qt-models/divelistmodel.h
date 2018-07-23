@@ -1,11 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
 #ifndef DIVELISTMODEL_H
 #define DIVELISTMODEL_H
 
 #include <QAbstractListModel>
 #include <QSortFilterProxyModel>
 
-#include "core/dive.h"
-#include "core/helpers.h"
 #include "core/subsurface-qt/DiveObjectHelper.h"
 
 class DiveListSortModel : public QSortFilterProxyModel
@@ -13,6 +12,8 @@ class DiveListSortModel : public QSortFilterProxyModel
 	Q_OBJECT
 public:
 	DiveListSortModel(QObject *parent = 0);
+	Q_INVOKABLE void addAllDives();
+	Q_INVOKABLE void clear();
 public slots:
 	int getDiveId(int idx);
 	int getIdxForId(int id);
@@ -43,6 +44,7 @@ public:
 	QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const;
 	QHash<int, QByteArray> roleNames() const;
 	QString startAddDive();
+	void resetInternalData();
 	Q_INVOKABLE DiveObjectHelper* at(int i);
 private:
 	QList<DiveObjectHelper*> m_dives;

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <errno.h>
 
 #include <QtBluetooth/QBluetoothAddress>
@@ -5,10 +6,11 @@
 #include <QEventLoop>
 #include <QTimer>
 #include <QDebug>
+#include <QThread>
 
 #include <libdivecomputer/version.h>
-
-#if defined(SSRF_CUSTOM_SERIAL)
+#include <libdivecomputer/context.h>
+#include <libdivecomputer/custom.h>
 
 #if defined(Q_OS_WIN)
 	#include <winsock2.h>
@@ -16,7 +18,16 @@
 	#include <ws2bth.h>
 #endif
 
-#include <libdivecomputer/custom_serial.h>
+#ifdef BLE_SUPPORT
+# include "qt-ble.h"
+#endif
+
+QList<QBluetoothUuid> registeredUuids;
+
+void addBtUuid(QBluetoothUuid uuid)
+{
+	registeredUuids << uuid;
+}
 
 extern "C" {
 typedef struct qt_serial_t {
@@ -31,7 +42,7 @@ typedef struct qt_serial_t {
 	long timeout;
 } qt_serial_t;
 
-static dc_status_t qt_serial_open(void **userdata, const char* devaddr)
+static dc_status_t qt_serial_open(qt_serial_t **io, dc_context_t*, const char* devaddr)
 {
 	// Allocate memory.
 	qt_serial_t *serial_port = (qt_serial_t *) malloc (sizeof (qt_serial_t));
@@ -64,7 +75,7 @@ static dc_status_t qt_serial_open(void **userdata, const char* devaddr)
 				(LPSOCKADDR) &socketBthAddress,
 				&socketBthAddressBth
 				) != 0) {
-		qDebug() << "FAiled to convert the address " << address;
+		qDebug() << "Failed to convert the address " << address;
 		free(address);
 
 		return DC_STATUS_IO;
@@ -87,7 +98,7 @@ static dc_status_t qt_serial_open(void **userdata, const char* devaddr)
 		return DC_STATUS_NODEVICE;
 	}
 
-	qDebug() << "Succesfully connected to device";
+	qDebug() << "Successfully connected to device";
 #else
 	// Create a RFCOMM socket
 	serial_port->socket = new QBluetoothSocket(QBluetoothServiceInfo::RfcommProtocol);
@@ -132,7 +143,14 @@ static dc_status_t qt_serial_open(void **userdata, const char* devaddr)
 #elif defined(Q_OS_ANDROID) || (QT_VERSION >= 0x050500 && defined(Q_OS_MAC))
 	// Try to connect to the device using the uuid of the Serial Port Profile service
 	QBluetoothAddress remoteDeviceAddress(devaddr);
-	serial_port->socket->connectToService(remoteDeviceAddress, QBluetoothUuid(QBluetoothUuid::SerialPort));
+#if defined(Q_OS_ANDROID)
+	QBluetoothUuid uuid = QBluetoothUuid(QUuid("{00001101-0000-1000-8000-00805f9b34fb}"));
+	qDebug() << "connecting to Uuid" << uuid;
+	serial_port->socket->setPreferredSecurityFlags(QBluetooth::NoSecurity);
+	serial_port->socket->connectToService(remoteDeviceAddress, uuid, QIODevice::ReadWrite | QIODevice::Unbuffered);
+#else
+	serial_port->socket->connectToService(remoteDeviceAddress, 1, QIODevice::ReadWrite | QIODevice::Unbuffered);
+#endif
 	timer.start(msec);
 	loop.exec();
 
@@ -168,14 +186,15 @@ static dc_status_t qt_serial_open(void **userdata, const char* devaddr)
 		}
 	}
 #endif
-	*userdata = serial_port;
+
+	*io = serial_port;
 
 	return DC_STATUS_SUCCESS;
 }
 
-static dc_status_t qt_serial_close(void **userdata)
+static dc_status_t qt_serial_close(void *io)
 {
-	qt_serial_t *device = (qt_serial_t*) *userdata;
+	qt_serial_t *device = (qt_serial_t*) io;
 
 	if (device == NULL)
 		return DC_STATUS_SUCCESS;
@@ -196,14 +215,12 @@ static dc_status_t qt_serial_close(void **userdata)
 	free(device);
 #endif
 
-	*userdata = NULL;
-
 	return DC_STATUS_SUCCESS;
 }
 
-static dc_status_t qt_serial_read(void **userdata, void* data, size_t size, size_t *actual)
+static dc_status_t qt_serial_read(void *io, void* data, size_t size, size_t *actual)
 {
-	qt_serial_t *device = (qt_serial_t*) *userdata;
+	qt_serial_t *device = (qt_serial_t*) io;
 
 #if defined(Q_OS_WIN)
 	if (device == NULL)
@@ -262,9 +279,9 @@ static dc_status_t qt_serial_read(void **userdata, void* data, size_t size, size
 	return DC_STATUS_SUCCESS;
 }
 
-static dc_status_t qt_serial_write(void **userdata, const void* data, size_t size, size_t *actual)
+static dc_status_t qt_serial_write(void *io, const void* data, size_t size, size_t *actual)
 {
-	qt_serial_t *device = (qt_serial_t*) *userdata;
+	qt_serial_t *device = (qt_serial_t*) io;
 
 #if defined(Q_OS_WIN)
 	if (device == NULL)
@@ -311,10 +328,10 @@ static dc_status_t qt_serial_write(void **userdata, const void* data, size_t siz
 	return DC_STATUS_SUCCESS;
 }
 
-static dc_status_t qt_serial_flush(void **userdata, dc_direction_t queue)
+static dc_status_t qt_serial_purge(void *io, dc_direction_t)
 {
-	qt_serial_t *device = (qt_serial_t*) *userdata;
-	(void)queue;
+	qt_serial_t *device = (qt_serial_t*) io;
+
 	if (device == NULL)
 		return DC_STATUS_INVALIDARGS;
 #if !defined(Q_OS_WIN)
@@ -326,9 +343,10 @@ static dc_status_t qt_serial_flush(void **userdata, dc_direction_t queue)
 	return DC_STATUS_SUCCESS;
 }
 
-static dc_status_t qt_serial_get_received(void **userdata, size_t *available)
+static dc_status_t qt_serial_get_available(void *io, size_t *available)
 {
-	qt_serial_t *device = (qt_serial_t*) *userdata;
+	qt_serial_t *device = (qt_serial_t*) io;
+
 #if defined(Q_OS_WIN)
 	if (device == NULL)
 		return DC_STATUS_INVALIDARGS;
@@ -345,6 +363,9 @@ static dc_status_t qt_serial_get_received(void **userdata, size_t *available)
 
 	return DC_STATUS_SUCCESS;
 }
+
+/* UNUSED! */
+static int qt_serial_get_transmitted(qt_serial_t *device) __attribute__ ((unused));
 
 static int qt_serial_get_transmitted(qt_serial_t *device)
 {
@@ -363,9 +384,9 @@ static int qt_serial_get_transmitted(qt_serial_t *device)
 #endif
 }
 
-static dc_status_t qt_serial_set_timeout(void **userdata, long timeout)
+static dc_status_t qt_serial_set_timeout(void *io, int timeout)
 {
-	qt_serial_t *device = (qt_serial_t*) *userdata;
+	qt_serial_t *device = (qt_serial_t*) io;
 
 	if (device == NULL)
 		return DC_STATUS_INVALIDARGS;
@@ -375,27 +396,75 @@ static dc_status_t qt_serial_set_timeout(void **userdata, long timeout)
 	return DC_STATUS_SUCCESS;
 }
 
-dc_custom_serial_t qt_serial_ops = {
-	.userdata = NULL,
-	.open = qt_serial_open,
-	.close = qt_serial_close,
-	.read = qt_serial_read,
-	.write = qt_serial_write,
-	.purge = qt_serial_flush,
-	.get_available = qt_serial_get_received,
-	.set_timeout = qt_serial_set_timeout,
-// These doesn't make sense over bluetooth
-// NULL means NOP
-	.configure = NULL,
-	.set_dtr = NULL,
-	.set_rts = NULL,
-	.set_halfduplex = NULL,
-	.set_break = NULL
-};
+static dc_status_t qt_custom_sleep(void *io, unsigned int timeout)
+{
+	QThread::msleep(timeout);
+	return DC_STATUS_SUCCESS;
+}
 
-dc_custom_serial_t* get_qt_serial_ops() {
-	return (dc_custom_serial_t*) &qt_serial_ops;
+#ifdef BLE_SUPPORT
+dc_status_t
+ble_packet_open(dc_iostream_t **iostream, dc_context_t *context, const char* devaddr, void *userdata)
+{
+	dc_status_t rc = DC_STATUS_SUCCESS;
+	void *io = NULL;
+
+	static const dc_custom_cbs_t callbacks = {
+		NULL, /* set_timeout */
+		NULL, /* set_latency */
+		NULL, /* set_break */
+		NULL, /* set_dtr */
+		NULL, /* set_rts */
+		NULL, /* get_lines */
+		NULL, /* get_received */
+		NULL, /* configure */
+		qt_ble_read, /* read */
+		qt_ble_write, /* write */
+		NULL, /* flush */
+		NULL, /* purge */
+		qt_custom_sleep, /* sleep */
+		qt_ble_close, /* close */
+	};
+
+	rc = qt_ble_open(&io, context, devaddr, (dc_user_device_t *) userdata);
+	if (rc != DC_STATUS_SUCCESS) {
+		return rc;
+	}
+
+	return dc_custom_open (iostream, context, DC_TRANSPORT_BLE, &callbacks, io);
+}
+#endif /* BLE_SUPPORT */
+
+
+dc_status_t
+rfcomm_stream_open(dc_iostream_t **iostream, dc_context_t *context, const char* devaddr)
+{
+	dc_status_t rc = DC_STATUS_SUCCESS;
+	qt_serial_t *io = NULL;
+
+	static const dc_custom_cbs_t callbacks = {
+		qt_serial_set_timeout, /* set_timeout */
+		NULL, /* set_latency */
+		NULL, /* set_break */
+		NULL, /* set_dtr */
+		NULL, /* set_rts */
+		NULL, /* get_lines */
+		qt_serial_get_available, /* get_received */
+		NULL, /* configure */
+		qt_serial_read, /* read */
+		qt_serial_write, /* write */
+		NULL, /* flush */
+		qt_serial_purge, /* purge */
+		qt_custom_sleep, /* sleep */
+		qt_serial_close, /* close */
+	};
+
+	rc = qt_serial_open(&io, context, devaddr);
+	if (rc != DC_STATUS_SUCCESS) {
+		return rc;
+	}
+
+	return dc_custom_open (iostream, context, DC_TRANSPORT_BLUETOOTH, &callbacks, io);
 }
 
 }
-#endif

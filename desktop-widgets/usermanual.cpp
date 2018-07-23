@@ -1,18 +1,19 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <QDesktopServices>
 #include <QShortcut>
 #include <QFile>
 
 #include "desktop-widgets/usermanual.h"
 #include "desktop-widgets/mainwindow.h"
-#include "core/helpers.h"
+#include "core/qthelper.h"
 
 SearchBar::SearchBar(QWidget *parent): QWidget(parent)
 {
 	ui.setupUi(this);
 	#if defined(Q_OS_MAC) || defined(Q_OS_WIN)
-	ui.findNext->setIcon(QIcon(":icons/subsurface/32x32/actions/go-down.png"));
-	ui.findPrev->setIcon(QIcon(":icons/subsurface/32x32/actions/go-up.png"));
-	ui.findClose->setIcon(QIcon(":icons/subsurface/32x32/actions/window-close.png"));
+	ui.findNext->setIcon(QIcon(":go-down-icon"));
+	ui.findPrev->setIcon(QIcon(":go-up-icon"));
+	ui.findClose->setIcon(QIcon(":window-close-icon"));
 	#endif
 
 	connect(ui.findNext, SIGNAL(pressed()), this, SIGNAL(searchNext()));
@@ -55,7 +56,7 @@ MyQWebEngineView::MyQWebEngineView(QWidget* parent)
 }
 #endif
 
-UserManual::UserManual(QWidget *parent) : QWidget(parent)
+UserManual::UserManual(QWidget *parent) : QDialog(parent)
 {
 	QShortcut *closeKey = new QShortcut(QKeySequence(Qt::CTRL + Qt::Key_W), this);
 	connect(closeKey, SIGNAL(activated()), this, SLOT(close()));
@@ -73,7 +74,7 @@ UserManual::UserManual(QWidget *parent) : QWidget(parent)
 	addAction(actionHideSearch);
 
 	setWindowTitle(tr("User manual"));
-	setWindowIcon(QIcon(":/subsurface-icon"));
+	setWindowIcon(QIcon(":subsurface-icon"));
 
 #ifdef USE_WEBENGINE
 	userManual = new MyQWebEngineView(this);

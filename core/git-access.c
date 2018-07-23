@@ -1,6 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
+#ifdef __clang__
 // Clang has a bug on zero-initialization of C structs.
 #pragma clang diagnostic ignored "-Wmissing-field-initializers"
+#endif
 
+#include "ssrf.h"
 #include <stdio.h>
 #include <ctype.h>
 #include <string.h>
@@ -11,20 +15,36 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <stdarg.h>
 #include <git2.h>
 
-#include "dive.h"
+#include "subsurface-string.h"
 #include "membuffer.h"
 #include "strndup.h"
-#include "qthelperfromc.h"
+#include "qthelper.h"
 #include "git-access.h"
 #include "gettext.h"
 
 bool is_subsurface_cloud = false;
 
-int (*update_progress_cb)(bool, const char *) = NULL;
+int (*update_progress_cb)(const char *) = NULL;
 
-void set_git_update_cb(int(*cb)(bool, const char *))
+static bool includes_string_caseinsensitive(const char *haystack, const char *needle)
+{
+	if (!needle)
+		return 1; /* every string includes the NULL string */
+	if (!haystack)
+		return 0; /* nothing is included in the NULL string */
+	int len = strlen(needle);
+	while (*haystack) {
+		if (strncasecmp(haystack, needle, len))
+			return 1;
+		haystack++;
+	}
+	return 0;
+}
+
+void set_git_update_cb(int(*cb)(const char *))
 {
 	update_progress_cb = cb;
 }
@@ -35,11 +55,11 @@ void set_git_update_cb(int(*cb)(bool, const char *))
 // proportional - some parts are based on compute performance, some on network speed)
 // they also provide information where in the process we are so we can analyze the log
 // to understand which parts of the process take how much time.
-int git_storage_update_progress(bool reset, const char *text)
+int git_storage_update_progress(const char *text)
 {
 	int ret = 0;
 	if (update_progress_cb)
-		ret = (*update_progress_cb)(reset, text);
+		ret = (*update_progress_cb)(text);
 	return ret;
 }
 
@@ -47,14 +67,11 @@ int git_storage_update_progress(bool reset, const char *text)
 // map the git progress to 20% of overall progress
 static void progress_cb(const char *path, size_t completed_steps, size_t total_steps, void *payload)
 {
-	(void) path;
-	(void) payload;
-	static size_t last_percent = -1;
-
-	if (total_steps && 20 * completed_steps / total_steps > last_percent) {
-		(void)git_storage_update_progress(false, "checkout_progress_cb");
-		last_percent = 20 * completed_steps / total_steps;
-	}
+	UNUSED(path);
+	UNUSED(payload);
+	char buf[80];
+	snprintf(buf, sizeof(buf),  translate("gettextFromC", "Checkout from storage (%lu/%lu)"), completed_steps, total_steps);
+	(void)git_storage_update_progress(buf);
 }
 
 // this randomly assumes that 80% of the time is spent on the objects and 20% on the deltas
@@ -62,22 +79,30 @@ static void progress_cb(const char *path, size_t completed_steps, size_t total_s
 // if the user cancels the dialog this is passed back to libgit2
 static int transfer_progress_cb(const git_transfer_progress *stats, void *payload)
 {
-	(void) payload;
-	static int last_percent = -1;
+	UNUSED(payload);
 
-	int percent = 0;
-	if (stats->total_objects)
-		percent = 16 * stats->received_objects / stats->total_objects;
-	if (stats->total_deltas)
-		percent += 4 * stats->indexed_deltas / stats->total_deltas;
+	static int last_done = -1;
+	char buf[80];
+	int done = 0;
+	int total = 0;
+
+	if (stats->total_objects) {
+		total = 60;
+		done = 60 * stats->received_objects / stats->total_objects;
+	}
+	if (stats->total_deltas) {
+		total += 20;
+		done += 20 * stats->indexed_deltas / stats->total_deltas;
+	}
 	/* for debugging this is useful
 	char buf[100];
 	snprintf(buf, 100, "transfer cb rec_obj %d tot_obj %d idx_delta %d total_delta %d local obj %d", stats->received_objects, stats->total_objects, stats->indexed_deltas, stats->total_deltas, stats->local_objects);
-	return git_storage_update_progress(false, buf);
+	return git_storage_update_progress(buf);
 	 */
-	if (percent > last_percent) {
-		last_percent = percent;
-		return git_storage_update_progress(false, "transfer cb");
+	if (done > last_done) {
+		last_done = done;
+		snprintf(buf, sizeof(buf), translate("gettextFromC", "Transfer from storage (%d/%d)"), done, total);
+		return git_storage_update_progress(buf);
 	}
 	return 0;
 }
@@ -85,18 +110,11 @@ static int transfer_progress_cb(const git_transfer_progress *stats, void *payloa
 // the initial push to sync the repos is mapped to 10% of overall progress
 static int push_transfer_progress_cb(unsigned int current, unsigned int total, size_t bytes, void *payload)
 {
-	(void) bytes;
-	(void) payload;
-	static int last_percent = -1;
-	int percent = 0;
-
-	if (total != 0)
-		percent = 5 * current / total;
-	if (percent > last_percent) {
-		last_percent = percent;
-		return git_storage_update_progress(false, "push trasfer cb");
-	}
-	return 0;
+	UNUSED(bytes);
+	UNUSED(payload);
+	char buf[80];
+	snprintf(buf, sizeof(buf), translate("gettextFromC", "Transfer to storage (%d/%d)"), current, total);
+	return git_storage_update_progress(buf);
 }
 
 char *get_local_dir(const char *remote, const char *branch)
@@ -126,7 +144,7 @@ static char *move_local_cache(const char *remote, const char *branch)
 
 static int check_clean(const char *path, unsigned int status, void *payload)
 {
-	(void) payload;
+	UNUSED(payload);
 	status &= ~GIT_STATUS_CURRENT | GIT_STATUS_IGNORED;
 	if (!status)
 		return 0;
@@ -186,6 +204,16 @@ static int reset_to_remote(git_repository *repo, git_reference *local, const git
 }
 
 static int auth_attempt = 0;
+static const int max_auth_attempts = 2;
+
+static bool exceeded_auth_attempts()
+{
+	if (auth_attempt++ > max_auth_attempts) {
+		report_error("Authentication to cloud storage failed.");
+		return true;
+	}
+	return false;
+}
 
 int credential_ssh_cb(git_cred **out,
 		  const char *url,
@@ -193,22 +221,37 @@ int credential_ssh_cb(git_cred **out,
 		  unsigned int allowed_types,
 		  void *payload)
 {
-	(void) url;
-	(void) allowed_types;
-	(void) payload;
+	UNUSED(url);
+	UNUSED(payload);
+	UNUSED(username_from_url);
 
-	const char *priv_key = format_string("%s/%s", system_default_directory(), "ssrf_remote.key");
-	const char *passphrase = prefs.cloud_storage_password ? strdup(prefs.cloud_storage_password) : strdup("");
+	const char *username = prefs.cloud_storage_email_encoded;
+	const char *passphrase = prefs.cloud_storage_password ? prefs.cloud_storage_password : "";
 
-	/* Bail out from libgit authentication loop when credentials are
-	 * incorrect */
-
-	if (auth_attempt++ > 2) {
-		report_error("Authentication to cloud storage failed.");
-		return GIT_EUSER;
+	// TODO: We need a way to differentiate between password and private key authentication
+	if (allowed_types & GIT_CREDTYPE_SSH_KEY) {
+		char *priv_key = format_string("%s/%s", system_default_directory(), "ssrf_remote.key");
+		if (!access(priv_key, F_OK)) {
+			if (exceeded_auth_attempts())
+				return GIT_EUSER;
+			int ret = git_cred_ssh_key_new(out, username, NULL, priv_key, passphrase);
+			free(priv_key);
+			return ret;
+		}
+		free(priv_key);
 	}
 
-	return git_cred_ssh_key_new(out, username_from_url, NULL, priv_key, passphrase);
+	if (allowed_types & GIT_CREDTYPE_USERPASS_PLAINTEXT) {
+		if (exceeded_auth_attempts())
+			return GIT_EUSER;
+		return git_cred_userpass_plaintext_new(out, username, passphrase);
+	}
+
+	if (allowed_types & GIT_CREDTYPE_USERNAME)
+		return git_cred_username_new(out, username);
+
+	report_error("No supported ssh authentication.");
+	return GIT_EUSER;
 }
 
 int credential_https_cb(git_cred **out,
@@ -217,27 +260,24 @@ int credential_https_cb(git_cred **out,
 			unsigned int allowed_types,
 			void *payload)
 {
-	(void) url;
-	(void) username_from_url;
-	(void) payload;
-	(void) allowed_types;
-	const char *username = prefs.cloud_storage_email_encoded;
-	const char *password = prefs.cloud_storage_password ? strdup(prefs.cloud_storage_password) : strdup("");
+	UNUSED(url);
+	UNUSED(username_from_url);
+	UNUSED(payload);
+	UNUSED(allowed_types);
 
-	/* Bail out from libgit authentication loop when credentials are
-	 * incorrect */
-
-	if (auth_attempt++ > 2) {
-		report_error("Authentication to cloud storage failed.");
+	if (exceeded_auth_attempts())
 		return GIT_EUSER;
-	}
+
+	const char *username = prefs.cloud_storage_email_encoded;
+	const char *password = prefs.cloud_storage_password ? prefs.cloud_storage_password : "";
+
 	return git_cred_userpass_plaintext_new(out, username, password);
 }
 
 #define KNOWN_CERT "\xfd\xb8\xf7\x73\x76\xe2\x75\x53\x93\x37\xdc\xfe\x1e\x55\x43\x3d\xf2\x2c\x18\x2c"
 int certificate_check_cb(git_cert *cert, int valid, const char *host, void *payload)
 {
-	(void) payload;
+	UNUSED(payload);
 	if (same_string(host, "cloud.subsurface-divelog.org") && cert->cert_type == GIT_CERT_X509) {
 		SHA_CTX ctx;
 		unsigned char hash[21];
@@ -258,8 +298,8 @@ int certificate_check_cb(git_cert *cert, int valid, const char *host, void *payl
 
 static int update_remote(git_repository *repo, git_remote *origin, git_reference *local, git_reference *remote, enum remote_transport rt)
 {
-	(void) repo;
-	(void) remote;
+	UNUSED(repo);
+	UNUSED(remote);
 
 	git_push_options opts = GIT_PUSH_OPTIONS_INIT;
 	git_strarray refspec;
@@ -292,7 +332,7 @@ extern int update_git_checkout(git_repository *repo, git_object *parent, git_tre
 
 static int try_to_git_merge(git_repository *repo, git_reference **local_p, git_reference *remote, git_oid *base, const git_oid *local_id, const git_oid *remote_id)
 {
-	(void) remote;
+	UNUSED(remote);
 	git_tree *local_tree, *remote_tree, *base_tree;
 	git_commit *local_commit, *remote_commit, *base_commit;
 	git_index *merged_index;
@@ -431,7 +471,7 @@ static int try_to_update(git_repository *repo, git_remote *origin, git_reference
 
 	if (verbose)
 		fprintf(stderr, "git storage: try to update\n");
-	git_storage_update_progress(false, "try to update");
+
 	if (!git_reference_cmp(local, remote))
 		return 0;
 
@@ -465,7 +505,7 @@ static int try_to_update(git_repository *repo, git_remote *origin, git_reference
 	}
 	/* Is the remote strictly newer? Use it */
 	if (git_oid_equal(&base, local_id)) {
-		git_storage_update_progress(false, "fast forward to remote");
+		git_storage_update_progress(translate("gettextFromC", "Update local storage to match cloud storage"));
 		return reset_to_remote(repo, local, remote_id);
 	}
 
@@ -473,7 +513,7 @@ static int try_to_update(git_repository *repo, git_remote *origin, git_reference
 	if (git_oid_equal(&base, remote_id)) {
 		if (verbose)
 			fprintf(stderr, "local is newer than remote, update remote\n");
-		git_storage_update_progress(false, "git_update_remote, local was newer");
+		git_storage_update_progress(translate("gettextFromC", "Push local changes to cloud storage"));
 		return update_remote(repo, origin, local, remote, rt);
 	}
 	/* Merging a bare repository always needs user action */
@@ -491,7 +531,7 @@ static int try_to_update(git_repository *repo, git_remote *origin, git_reference
 			return report_error("Local and remote do not match, local branch not HEAD - cannot update");
 	}
 	/* Ok, let's try to merge these */
-	git_storage_update_progress(false, "try to merge");
+	git_storage_update_progress(translate("gettextFromC", "Try to merge local changes into cloud storage"));
 	ret = try_to_git_merge(repo, &local, remote, &base, local_id, remote_id);
 	if (ret == 0)
 		return update_remote(repo, origin, local, remote, rt);
@@ -513,7 +553,6 @@ static int check_remote_status(git_repository *repo, git_remote *origin, const c
 
 	if (verbose)
 		fprintf(stderr, "git storage: check remote status\n");
-	git_storage_update_progress(false, "git check remote status");
 
 	if (git_branch_lookup(&local_ref, repo, branch, GIT_BRANCH_LOCAL)) {
 		if (is_subsurface_cloud)
@@ -534,7 +573,7 @@ static int check_remote_status(git_repository *repo, git_remote *origin, const c
 		else if (rt == RT_HTTPS)
 			opts.callbacks.credentials = credential_https_cb;
 		opts.callbacks.certificate_check = certificate_check_cb;
-		git_storage_update_progress(false, "git remote push (no remote existed)");
+		git_storage_update_progress(translate("gettextFromC", "Store data into cloud storage"));
 		error = git_remote_push(origin, &refspec, &opts);
 	} else {
 		error = try_to_update(repo, origin, local_ref, remote_ref, remote, branch, rt);
@@ -558,7 +597,7 @@ int sync_with_remote(git_repository *repo, const char *remote, const char *branc
 	}
 	if (verbose)
 		fprintf(stderr, "sync with remote %s[%s]\n", remote, branch);
-	git_storage_update_progress(false, "sync with remote");
+	git_storage_update_progress(translate("gettextFromC", "Sync with cloud storage"));
 	git_repository_config(&conf, repo);
 	if (rt == RT_HTTPS && getProxyString(&proxy_string)) {
 		if (verbose)
@@ -582,10 +621,10 @@ int sync_with_remote(git_repository *repo, const char *remote, const char *branc
 		return 0;
 	}
 
-	if (rt == RT_HTTPS && !canReachCloudServer()) {
+	if (is_subsurface_cloud && !canReachCloudServer()) {
 		// this is not an error, just a warning message, so return 0
 		report_error("Cannot connect to cloud server, working with local copy");
-		git_storage_update_progress(false, "can't reach cloud server, working with local copy");
+		git_storage_update_progress(translate("gettextFromC", "Can't reach cloud server, working with local data"));
 		return 0;
 	}
 	if (verbose)
@@ -598,7 +637,7 @@ int sync_with_remote(git_repository *repo, const char *remote, const char *branc
 	else if (rt == RT_HTTPS)
 		opts.callbacks.credentials = credential_https_cb;
 	opts.callbacks.certificate_check = certificate_check_cb;
-	git_storage_update_progress(false, "git fetch remote");
+	git_storage_update_progress(translate("gettextFromC", "Successful cloud connection, fetch remote"));
 	error = git_remote_fetch(origin, NULL, &opts, NULL);
 	// NOTE! A fetch error is not fatal, we just report it
 	if (error) {
@@ -607,13 +646,17 @@ int sync_with_remote(git_repository *repo, const char *remote, const char *branc
 		else
 			report_error("Unable to fetch remote '%s'", remote);
 		if (verbose)
-			fprintf(stderr, "remote fetch failed (%s)\n", giterr_last()->message);
+			// If we returned GIT_EUSER during authentication, giterr_last() returns NULL
+			fprintf(stderr, "remote fetch failed (%s)\n",
+				giterr_last() ? giterr_last()->message : "authentication failed");
+		// Since we failed to sync with online repository, enter offline mode
+		prefs.git_local_only = true;
 		error = 0;
 	} else {
 		error = check_remote_status(repo, origin, remote, branch, rt);
 	}
 	git_remote_free(origin);
-	git_storage_update_progress(false, "done with sync with remote");
+	git_storage_update_progress(translate("gettextFromC", "Done syncing with cloud storage"));
 	return error;
 }
 
@@ -641,11 +684,16 @@ static git_repository *update_local_repo(const char *localdir, const char *remot
 
 static int repository_create_cb(git_repository **out, const char *path, int bare, void *payload)
 {
-	(void) payload;
+	UNUSED(payload);
 	char *proxy_string;
 	git_config *conf;
 
 	int ret = git_repository_init(out, path, bare);
+	if (ret != 0) {
+		if (verbose)
+			fprintf(stderr, "Initializing git repository failed\n");
+		return ret;
+	}
 
 	git_repository_config(&conf, *out);
 	if (getProxyString(&proxy_string)) {
@@ -667,7 +715,6 @@ static git_repository *create_and_push_remote(const char *localdir, const char *
 {
 	git_repository *repo;
 	git_config *conf;
-	int len;
 	char *variable_name, *merge_head;
 
 	if (verbose)
@@ -685,21 +732,20 @@ static git_repository *create_and_push_remote(const char *localdir, const char *
 
 	/* create a config so we can set the remote tracking branch */
 	git_repository_config(&conf, repo);
-	len = sizeof("branch..remote") + strlen(branch);
-	variable_name = malloc(len);
-	snprintf(variable_name, len, "branch.%s.remote", branch);
+	variable_name = format_string("branch.%s.remote", branch);
 	git_config_set_string(conf, variable_name, "origin");
-	/* we know this is shorter than the previous one, so we reuse the variable*/
-	snprintf(variable_name, len, "branch.%s.merge", branch);
-	len = sizeof("refs/heads/") + strlen(branch);
-	merge_head = malloc(len);
-	snprintf(merge_head, len, "refs/heads/%s", branch);
+	free(variable_name);
+
+	variable_name = format_string("branch.%s.merge", branch);
+	merge_head = format_string("refs/heads/%s", branch);
 	git_config_set_string(conf, variable_name, merge_head);
+	free(merge_head);
+	free(variable_name);
 
 	/* finally create an empty commit and push it to the remote */
 	if (do_git_save(repo, branch, remote, false, true))
 		return NULL;
-	return(repo);
+	return repo;
 }
 
 static git_repository *create_local_repo(const char *localdir, const char *remote, const char *branch, enum remote_transport rt)
@@ -721,7 +767,7 @@ static git_repository *create_local_repo(const char *localdir, const char *remot
 	opts.fetch_opts.callbacks.certificate_check = certificate_check_cb;
 
 	opts.checkout_branch = branch;
-	if (rt == RT_HTTPS && !canReachCloudServer())
+	if (is_subsurface_cloud && !canReachCloudServer())
 		return 0;
 	if (verbose > 1)
 		fprintf(stderr, "git storage: calling git_clone()\n");
@@ -729,14 +775,19 @@ static git_repository *create_local_repo(const char *localdir, const char *remot
 	if (verbose > 1)
 		fprintf(stderr, "git storage: returned from git_clone() with error %d\n", error);
 	if (error) {
-		char *msg = giterr_last()->message;
-		int len = sizeof("Reference 'refs/remotes/origin/' not found") + strlen(branch);
-		char *pattern = malloc(len);
-		snprintf(pattern, len, "Reference 'refs/remotes/origin/%s' not found", branch);
-		if (strstr(remote, prefs.cloud_git_url) && strstr(msg, pattern)) {
+		char *msg = "";
+		if (giterr_last()) {
+			 msg = giterr_last()->message;
+			 fprintf(stderr, "error message was %s\n", msg);
+		}
+		char *pattern = format_string("reference 'refs/remotes/origin/%s' not found", branch);
+		// it seems that we sometimes get 'Reference' and sometimes 'reference'
+		if (includes_string_caseinsensitive(msg, pattern)) {
 			/* we're trying to open the remote branch that corresponds
 			 * to our cloud storage and the branch doesn't exist.
 			 * So we need to create the branch and push it to the remote */
+			if (verbose)
+				fprintf(stderr, "remote repo didn't include our branch\n");
 			cloned_repo = create_and_push_remote(localdir, remote, branch);
 #if !defined(DEBUG) && !defined(SUBSURFACE_MOBILE)
 		} else if (is_subsurface_cloud) {
@@ -750,25 +801,28 @@ static git_repository *create_local_repo(const char *localdir, const char *remot
 	return cloned_repo;
 }
 
+enum remote_transport url_to_remote_transport(const char *remote)
+{
+	/* figure out the remote transport */
+	if (strncmp(remote, "ssh://", 6) == 0)
+		return RT_SSH;
+	else if (strncmp(remote, "https://", 8) == 0)
+		return RT_HTTPS;
+	else
+		return RT_OTHER;
+}
+
 static struct git_repository *get_remote_repo(const char *localdir, const char *remote, const char *branch)
 {
 	struct stat st;
-	enum remote_transport rt;
-
-	/* figure out the remote transport */
-	if (strncmp(remote, "ssh://", 6) == 0)
-		rt = RT_SSH;
-	else if (strncmp(remote, "https://", 8) == 0)
-		rt = RT_HTTPS;
-	else
-		rt = RT_OTHER;
+	enum remote_transport rt = url_to_remote_transport(remote);
 
 	if (verbose > 1) {
 		fprintf(stderr, "git_remote_repo: accessing %s\n", remote);
 	}
-	git_storage_update_progress(false, "start git interaction");
+	git_storage_update_progress(translate("gettextFromC", "Synchronising data file"));
 	/* Do we already have a local cache? */
-	if (!stat(localdir, &st)) {
+	if (!subsurface_stat(localdir, &st)) {
 		if (!S_ISDIR(st.st_mode)) {
 			if (is_subsurface_cloud)
 				(void)cleanup_local_cache(remote, branch);
@@ -777,12 +831,21 @@ static struct git_repository *get_remote_repo(const char *localdir, const char *
 			return NULL;
 		}
 		return update_local_repo(localdir, remote, branch, rt);
+	} else {
+		/* We have no local cache yet.
+		 * Take us temporarly online to create a local and
+		 * remote cloud repo.
+		 */
+		git_repository *ret;
+		bool glo = prefs.git_local_only;
+		prefs.git_local_only = false;
+		ret = create_local_repo(localdir, remote, branch, rt);
+		prefs.git_local_only = glo;
+		return ret;
 	}
-	if (!prefs.git_local_only)
-		return create_local_repo(localdir, remote, branch, rt);
-	else
-		return 0;
 
+	/* all normal cases are handled above */
+	return 0;
 }
 
 /*
@@ -798,7 +861,7 @@ static struct git_repository *get_remote_repo(const char *localdir, const char *
 static struct git_repository *is_remote_git_repository(char *remote, const char *branch)
 {
 	char c, *localdir;
-	const char *p = remote;
+	char *p = remote;
 
 	while ((c = *p++) >= 'a' && c <= 'z')
 		/* nothing */;
@@ -807,15 +870,10 @@ static struct git_repository *is_remote_git_repository(char *remote, const char 
 	if (*p++ != '/' || *p++ != '/')
 		return NULL;
 
-	/* Special-case "file://", since it's already local */
-	if (!strncmp(remote, "file://", 7))
-		remote += 7;
-
 	/*
-	 * Ok, we found "[a-z]*://", we've simplified the
-	 * local repo case (because libgit2 is insanely slow
-	 * for that), and we think we have a real "remote
-	 * git" format.
+	 * Ok, we found "[a-z]*://" and we think we have a real
+	 * "remote git" format. The "file://" case was handled
+	 * in the calling function.
 	 *
 	 * We now create the SHA1 hash of the whole thing,
 	 * including the branch name. That will be our unique
@@ -837,21 +895,19 @@ static struct git_repository *is_remote_git_repository(char *remote, const char 
 
 	/*
 	 * next we need to make sure that any encoded username
-	 * has been extracted from an https:// based URL
+	 * has been extracted from the URL
 	 */
-	if  (!strncmp(remote, "https://", 8)) {
-		char *at = strchr(remote, '@');
-		if (at) {
-			/* was this the @ that denotes an account? that means it was before the
-			 * first '/' after the https:// - so let's find a '/' after that and compare */
-			char *slash = strchr(remote + 8, '/');
-			if (slash && slash > at) {
-				/* grab the part between "https://" and "@" as encoded email address
-				 * (that's our username) and move the rest of the URL forward, remembering
-				 * to copy the closing NUL as well */
-				prefs.cloud_storage_email_encoded = strndup(remote + 8, at - remote - 8);
-				memmove(remote + 8, at + 1, strlen(at + 1) + 1);
-			}
+	char *at = strchr(remote, '@');
+	if (at) {
+		/* was this the @ that denotes an account? that means it was before the
+		 * first '/' after the protocol:// - so let's find a '/' after that and compare */
+		char *slash = strchr(p, '/');
+		if (slash && slash > at) {
+			/* grab the part between "protocol://" and "@" as encoded email address
+			 * (that's our username) and move the rest of the URL forward, remembering
+			 * to copy the closing NUL as well */
+			prefs.cloud_storage_email_encoded = strndup(p, at - p);
+			memmove(p, at + 1, strlen(at + 1) + 1);
 		}
 	}
 	localdir = get_local_dir(remote, branch);
@@ -879,6 +935,15 @@ struct git_repository *is_git_repository(const char *filename, const char **bran
 	flen = strlen(filename);
 	if (!flen || filename[--flen] != ']')
 		return NULL;
+
+	/*
+	 * Special-case "file://", and treat it as a local
+	 * repository since libgit2 is insanely slow for that.
+	 */
+	if (!strncmp(filename, "file://", 7)) {
+		filename += 7;
+		flen -= 7;
+	}
 
 	/* Find the matching '[' */
 	blen = 0;
@@ -934,7 +999,9 @@ struct git_repository *is_git_repository(const char *filename, const char **bran
 		return repo;
 	}
 
-	if (stat(loc, &st) < 0 || !S_ISDIR(st.st_mode)) {
+	if (subsurface_stat(loc, &st) < 0 || !S_ISDIR(st.st_mode)) {
+		if (verbose)
+			fprintf(stderr, "loc %s wasn't found or is not a directory\n", loc);
 		free(loc);
 		free(branch);
 		return dummy_git_repository;
@@ -963,5 +1030,6 @@ int git_create_local_repo(const char *filename)
 	free(path);
 	if (ret != 0)
 		(void)report_error("Create local repo failed with error code %d", ret);
+	git_repository_free(repo);
 	return ret;
 }

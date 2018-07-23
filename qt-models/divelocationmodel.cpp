@@ -1,13 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "core/units.h"
 #include "qt-models/divelocationmodel.h"
-#include "core/dive.h"
+#include "core/qthelper.h"
 #include <QDebug>
 #include <QLineEdit>
 #include <QIcon>
+#include <core/gettextfromc.h>
 
-bool dive_site_less_than(dive_site *a, dive_site *b)
+static bool dive_site_less_than(dive_site *a, dive_site *b)
 {
-	return QString(a->name) <= QString(b->name);
+	return QString(a->name) < QString(b->name);
 }
 
 LocationInformationModel *LocationInformationModel::instance()
@@ -22,15 +24,13 @@ LocationInformationModel::LocationInformationModel(QObject *obj) : QAbstractTabl
 {
 }
 
-int LocationInformationModel::columnCount(const QModelIndex &parent) const
+int LocationInformationModel::columnCount(const QModelIndex&) const
 {
-	Q_UNUSED(parent);
 	return COLUMNS;
 }
 
-int LocationInformationModel::rowCount(const QModelIndex &parent) const
+int LocationInformationModel::rowCount(const QModelIndex&) const
 {
-	Q_UNUSED(parent);
 	return internalRowCount + 2;
 }
 
@@ -78,7 +78,7 @@ QVariant LocationInformationModel::data(const QModelIndex &index, int role) cons
 				}
 				return textField->text();
 			}
-			case Qt::DecorationRole : return QIcon(":plus");
+			case Qt::DecorationRole : return QIcon(":list-add-icon");
 		}
 	}
 
@@ -106,7 +106,7 @@ QVariant LocationInformationModel::data(const QModelIndex &index, int role) cons
 	break;
 	case Qt::DecorationRole : {
 		if (dive_site_has_gps_location(ds))
-			return QIcon(":geocode");
+			return QIcon(":geotag-icon");
 		else
 			return QVariant();
 	}
@@ -126,21 +126,15 @@ void LocationInformationModel::update()
 	beginResetModel();
 	internalRowCount = dive_site_table.nr;
 	qSort(dive_site_table.dive_sites, dive_site_table.dive_sites + dive_site_table.nr, dive_site_less_than);
+	locationNames.clear();
+	for (int i = 0; i < internalRowCount; i++)
+		locationNames << QString(dive_site_table.dive_sites[i]->name);
 	endResetModel();
 }
 
-uint32_t LocationInformationModel::addDiveSite(const QString& name, timestamp_t divetime, int lon, int lat)
+QStringList LocationInformationModel::allSiteNames() const
 {
-	degrees_t latitude, longitude;
-	latitude.udeg = lat;
-	longitude.udeg = lon;
-
-	beginInsertRows(QModelIndex(), dive_site_table.nr + 2, dive_site_table.nr + 2);
-	uint32_t uuid = create_dive_site_with_gps(name.toUtf8().data(), latitude, longitude, divetime);
-	qSort(dive_site_table.dive_sites, dive_site_table.dive_sites + dive_site_table.nr, dive_site_less_than);
-	internalRowCount = dive_site_table.nr;
-	endInsertRows();
-	return uuid;
+	return locationNames;
 }
 
 bool LocationInformationModel::setData(const QModelIndex &index, const QVariant &value, int role)
@@ -153,15 +147,13 @@ bool LocationInformationModel::setData(const QModelIndex &index, const QVariant 
 
 	struct dive_site *ds = get_dive_site(index.row());
 	free(ds->name);
-	ds->name = copy_string(qPrintable(value.toString()));
+	ds->name = copy_qstring(value.toString());
 	emit dataChanged(index, index);
 	return true;
 }
 
-bool LocationInformationModel::removeRows(int row, int count, const QModelIndex & parent)
+bool LocationInformationModel::removeRows(int row, int, const QModelIndex&)
 {
-	Q_UNUSED(count);
-	Q_UNUSED(parent);
 	if(row >= rowCount())
 		return false;
 
@@ -184,7 +176,7 @@ GeoReferencingOptionsModel::GeoReferencingOptionsModel(QObject *parent) : QStrin
 	QStringList list;
 	int i;
 	for (i = 0; i < TC_NR_CATEGORIES; i++)
-		list << taxonomy_category_names[i];
+		list << gettextFromC::tr(taxonomy_category_names[i]);
 	setStringList(list);
 }
 
@@ -204,5 +196,5 @@ bool filter_same_gps_cb (QAbstractItemModel *model, int sourceRow, const QModelI
 	if (ds->latitude.udeg == 0 || ds->longitude.udeg == 0)
 		return false;
 
-	return (ds->latitude.udeg == ref_lat && ds->longitude.udeg == ref_lon && ds->uuid != ref_uuid);
+	return ds->latitude.udeg == ref_lat && ds->longitude.udeg == ref_lon && ds->uuid != ref_uuid;
 }

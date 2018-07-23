@@ -1,5 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "qt-models/divelistmodel.h"
-#include "core/helpers.h"
+#include "core/qthelper.h"
 #include <QDateTime>
 
 DiveListSortModel::DiveListSortModel(QObject *parent) : QSortFilterProxyModel(parent)
@@ -22,6 +23,18 @@ int DiveListSortModel::getIdxForId(int id)
 			return i;
 	}
 	return -1;
+}
+
+void DiveListSortModel::clear()
+{
+	DiveListModel *mySourceModel = qobject_cast<DiveListModel *>(sourceModel());
+	mySourceModel->clear();
+}
+
+void DiveListSortModel::addAllDives()
+{
+	DiveListModel *mySourceModel = qobject_cast<DiveListModel *>(sourceModel());
+	mySourceModel->addAllDives();
 }
 
 DiveListModel *DiveListModel::m_instance = NULL;
@@ -63,6 +76,7 @@ void DiveListModel::insertDive(int i, DiveObjectHelper *newDive)
 void DiveListModel::removeDive(int i)
 {
 	beginRemoveRows(QModelIndex(), i, i);
+	delete m_dives.at(i);
 	m_dives.removeAt(i);
 	endRemoveRows();
 }
@@ -80,6 +94,8 @@ void DiveListModel::removeDiveById(int id)
 void DiveListModel::updateDive(int i, dive *d)
 {
 	DiveObjectHelper *newDive = new DiveObjectHelper(d);
+	// we need to make sure that QML knows that this dive has changed -
+	// the only reliable way I've found is to remove and re-insert it
 	removeDive(i);
 	insertDive(i, newDive);
 }
@@ -92,6 +108,16 @@ void DiveListModel::clear()
 		m_dives.clear();
 		endRemoveRows();
 	}
+}
+
+void DiveListModel::resetInternalData()
+{
+	// this is a hack. There is a long standing issue, that seems related to a
+	// sync problem between QML engine and underlying model data. It causes delete
+	// from divelist (on mobile) to crash. But not always. This function is part of
+	// an attempt to fix this. See commit.
+	beginResetModel();
+	endResetModel();
 }
 
 int DiveListModel::rowCount(const QModelIndex &) const

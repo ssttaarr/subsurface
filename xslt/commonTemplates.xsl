@@ -168,6 +168,83 @@
     <xsl:value-of select="concat(floor($depth div 1000), '.', format-number($depth mod 1000, '00'))"/>
   </xsl:template>
 
+  <!-- convert depth to meters -->
+  <xsl:template name="depthConvert">
+    <xsl:param name="depth"/>
+    <xsl:param name="units"/>
+
+    <xsl:choose>
+      <xsl:when test="$units = 'Imperial'">
+        <xsl:value-of select="concat(format-number(($depth * 0.3048), '#.##'), ' m')"/>
+      </xsl:when>
+      <xsl:otherwise>
+        <xsl:value-of select="concat($depth, ' m')"/>
+      </xsl:otherwise>
+    </xsl:choose>
+  </xsl:template>
+  <!-- end convert depth -->
+
+  <!-- convert pressure to bars -->
+  <xsl:template name="pressureConvert">
+    <xsl:param name="number"/>
+    <xsl:param name="units"/>
+
+    <xsl:choose>
+      <xsl:when test="$units = 'Imperial'">
+        <xsl:value-of select="concat(format-number(($number div 14.5037738007), '#.##'), ' bar')"/>
+      </xsl:when>
+      <xsl:otherwise>
+        <xsl:value-of select="concat($number, ' bar')"/>
+      </xsl:otherwise>
+    </xsl:choose>
+  </xsl:template>
+  <!-- end convert pressure -->
+
+  <!-- convert cuft to litres -->
+  <xsl:template name="sizeConvert">
+    <xsl:param name="singleSize"/>
+    <xsl:param name="double"/>
+    <xsl:param name="pressure"/>
+    <xsl:param name="units"/>
+
+    <xsl:variable name="size">
+      <xsl:value-of select="format-number($singleSize + $singleSize * $double, '#.##')"/>
+    </xsl:variable>
+
+    <xsl:choose>
+      <xsl:when test="$units = 'Imperial'">
+        <xsl:if test="$pressure != '0'">
+          <xsl:value-of select="concat(format-number((($size * 14.7 div $pressure) div 0.035315), '#.##'), ' l')"/>
+        </xsl:if>
+      </xsl:when>
+      <xsl:otherwise>
+        <xsl:value-of select="concat($size, ' l')"/>
+      </xsl:otherwise>
+    </xsl:choose>
+  </xsl:template>
+  <!-- end convert pressure -->
+
+  <!-- convert temperature from F to C -->
+  <xsl:template name="tempConvert">
+    <xsl:param name="temp"/>
+    <xsl:param name="units"/>
+
+    <xsl:choose>
+      <xsl:when test="$units = 'Imperial'">
+        <xsl:if test="$temp != ''">
+          <xsl:value-of select="concat(format-number(($temp - 32) * 5 div 9, '0.0'), ' C')"/>
+        </xsl:if>
+      </xsl:when>
+      <xsl:otherwise>
+        <xsl:if test="$temp != ''">
+          <xsl:value-of select="concat($temp, ' C')"/>
+        </xsl:if>
+      </xsl:otherwise>
+    </xsl:choose>
+  </xsl:template>
+  <!-- end convert temperature -->
+
+
   <!-- Convert date format "Sun Jan 19 11:02:56 2014 UTC" => 2014-1-19
        11:02 -->
   <xsl:template name="convertDate">
@@ -259,7 +336,7 @@
                 <xsl:value-of select="substring-before($line,$fs)"/>
               </xsl:when>
               <xsl:otherwise>
-                <xsl:if test="substring-after($line, $fs) = ''">
+                <xsl:if test="substring-after($line, $fs) = '' and $line != $fs">
                   <xsl:value-of select="$line"/>
                 </xsl:if>
               </xsl:otherwise>

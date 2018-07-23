@@ -2,55 +2,118 @@ Building Subsurface from Source
 ===============================
 
 Subsurface uses quite a few open source libraries and frameworks to do its
-job. The most important ones include libdivecomputer, Qt, Marble
-(more precisely libmarblewidget), libxml2, libxslt, libsqlite3, libzip,
-libgrantlee5 and libgit2.
+job. The most important ones include libdivecomputer, Qt, libxml2, libxslt,
+libsqlite3, libzip, libgrantlee5 and libgit2.
 
-Below are instructions for building Subsurface under some popular
-Linux distributions, for building Subsurface using Homebrew on a Mac,
-and for cross-building Subsurface for Windows. The lack of a working
-package management system for Windows makes it really painful to build
-Subsurface natively under Windows, so we don't support that at all.
+Below are instructions for building Subsurface
+- on some popular Linux distributions,
+- MacOSX,
+- Windows (cross-building)
+- Android (cross-building)
+- iOS (cross-building)
 
-All of the prebuilt binaries that we provide (right now Windows, Mac,
-Ubuntu/Debian/LinuxMint, and openSUSE/Fedora) are built using our own
-custom "flavors" of libdivecomputer and libmarblewidget. You can get
-these from
 
-git://git.subsurface-divelog.org/marble (in the Subsurface-branch branch)
-git://git.subsurface-divelog.org/libdc (in the Subsurface-branch branch)
+Getting Subsurface source
+-------------------------
 
-Those branches won't have a pretty history and will include ugly merges,
-but they should always allow a fast forward pull that tracks what we believe
-developers should build against.
+You can get the sources to the latest development version from our git
+repository:
+    git clone http://github.com/Subsurface-divelog/subsurface.git
 
-In contrast to that both repositories also have Subsurface-clean branches.
-These should allow distros to see which patches we have applied on top of
+You keep it updated by doing:
+    git checkout master
+    git pull -r
+    
+   
+
+Getting our flavor of libdivecomputer
+-------------------------------------
+
+All our prebuilt binaries (see https://subsurface-divelog.org/download)
+are built using our own custom "flavor" of libdivecomputer
+see https://github.com/Subsurface-divelog/libdc.git
+
+In order to get the modified sources, do
+- locate yourself in the subsurface repo on your local computer
+- run "git submoule init"
+- run "git submodule update"
+
+The branches won't have a pretty history and will include ugly merges,
+but they should always allow a fast forward pull that tracks what we
+believe developers should build against. All our patches are contained
+in the "Subsurface-NG".
+
+This should allow distros to see which patches we have applied on top of
 upstream. They will receive force pushes as we rebase to newer versions of
 upstream so they are not ideal for ongoing development (but they are of
 course easy to use for distributions as they always build "from scratch",
 anyway).
 
-The rationale for this is that we have no intention of forking either of
-these two projects. We simply are adding a few patches on top of their
-latest versions and want to do so in a manner that is both easy for our
+The rationale for this is that we have no intention of forking the
+project. We simply are adding a few patches on top of their latest
+version and want to do so in a manner that is both easy for our
 developers who try to keep them updated frequently, and anyone packaging
 Subsurface or trying to understand what we have done relative to their
 respective upstreams.
 
-At this point Qt5 is required, Qt5.4 or newer is recommended and on the
-Mac, in order to get native Bluetooth support, Qt5.5 is necessary.
 
-Similarly, in order for our cloud storage to be fully functional you need
+Getting Qt5
+-----------
+
+We use Qt5 in order to only maintain one UI across platforms. Qt5.8 is the
+oldest version supported.
+
+Download the Open Source version from https://www.qt.io/download and 
+follow the Qt instructions to install it or alternatively follow the
+instruction specific to a distribution (see build instructions).
+
+To save time and disk space you can unselect Android and IOS packages
+(Of course unless you want to build Android/iOS versions) as well as
+- Qt Data Visualisation
+- Qt Purchasing
+- Qt Virtual Keyboard",
+- Qt WebEngine
+- Qt Network Authorization
+- Qt Remote Objects
+- Qt WebGL Streaming
+- Qt 3D2
+- Qt Canvas 3D
+- Qt Extras
+This can be done later by use of MaintenanceTool.app in your Qt folder.
+
+Remark: most Qt installations do not make Qt available on the command
+line, which is needed. In order to make Qt available you need to 
+add qmake to the path, do something like
+PATH=$PATH:<Qt location>/<version>/<type>/bin
+
+QtWebKit is needed, if you want to print, but no longer part of Qt5,
+so you need to download it and compile. In case you just want to test
+without print possibility omit this step.
+
+
+Other third party library dependencies
+--------------------------------------
+
+In order for our cloud storage to be fully functional you need
 libgit2 0.23 or newer.
 
-Finally, as of Subsurface 4.5 we have switched our build system to cmake.
-qmake based builds are no longer supported.
+
+cmake build system
+------------------
+
+Our main build system is based on cmake. But qmake is needed
+for the googlemaps plugin and the iOS build.
+
+Download from https://cmake.org/download and follow the instructions
+to install it or alternatively follow the instruction specific to a
+distribution (see build instructions).
+
+
 
 Build options for Subsurface
 ----------------------------
 
-The following options are recognized when passed to cmake:
+The following options are recognised when passed to cmake:
 
  -DCMAKE_BUILD_TYPE=Release	create a release build
  -DCMAKE_BUILD_TYPE=Debug	create a debug build
@@ -60,7 +123,7 @@ verbose mode by calling
 
  make VERBOSE=1
 
-Many more variables are support, the easiest way to interact with them is
+Many more variables are supported, the easiest way to interact with them is
 to call
 
  ccmake .
@@ -92,16 +155,29 @@ sudo zypper install git gcc-c++ make autoconf automake libtool cmake libzip-deve
 	libqt5-qtscript-devel libqt5-qtdeclarative-devel \
 	libqt5-qtconnectivity-devel libqt5-qtlocation-devel libcurl-devel
 
-On Debian Stretch and recent Ubuntu flavors this seems to work
+On Debian Stretch this seems to work
 
-sudo apt-get install git g++ make autoconf automake libtool cmake pkg-config \
-	libxml2-dev libxslt1-dev libzip-dev libsqlite3-dev \
-	libusb-1.0-0-dev libssl-dev \
-	qt5-default qt5-qmake qtchooser qttools5-dev-tools libqt5svg5-dev \
-	libqt5webkit5-dev libqt5qml5 libqt5quick5 libqt5declarative5 \
-	qtscript5-dev libssh2-1-dev libcurl4-openssl-dev qttools5-dev \
-	qtconnectivity5-dev qtlocation5-dev qtpositioning5-dev \
-	libcrypto++-dev libssl-dev
+sudo apt install \
+	autoconf automake cmake g++ git libcrypto++-dev libcurl4-openssl-dev \
+	libgit2-dev libqt5declarative5 libqt5qml5 libqt5quick5 libqt5svg5-dev \
+	libqt5webkit5-dev libsqlite3-dev libssh2-1-dev libssl-dev libssl-dev \
+	libtool libusb-1.0-0-dev libxml2-dev libxslt1-dev libzip-dev make \
+	pkg-config qml-module-qtlocation qml-module-qtpositioning \
+	qml-module-qtquick2 qt5-default qt5-qmake qtchooser qtconnectivity5-dev \
+	qtlocation5-dev qtpositioning5-dev qtscript5-dev qttools5-dev \
+	qttools5-dev-tools
+
+Package names for Ubuntu 18.04
+
+sudo apt install \
+	autoconf automake cmake g++ git libcrypto++-dev libcurl4-gnutls-dev \
+	libgit2-dev libqt5qml5 libqt5quick5 libqt5svg5-dev \
+	libqt5webkit5-dev libsqlite3-dev libssh2-1-dev libssl-dev libssl-dev \
+	libtool libusb-1.0-0-dev libxml2-dev libxslt1-dev libzip-dev make \
+	pkg-config qml-module-qtlocation qml-module-qtpositioning \
+	qml-module-qtquick2 qt5-default qt5-qmake qtchooser qtconnectivity5-dev \
+	qtdeclarative5-dev qtdeclarative5-private-dev qtlocation5-dev \
+	qtpositioning5-dev qtscript5-dev qttools5-dev qttools5-dev-tools
 
 On PCLinuxOS you appear to need the following packages
 
@@ -118,7 +194,7 @@ like this:
 
 mkdir -p ~/src
 cd ~/src
-git clone git://subsurface-divelog.org/subsurface
+git clone https://github.com/Subsurface-divelog/subsurface.git
 ./subsurface/scripts/build.sh # <- this step will take quite a while as it
                               #    compiles a handful of libraries before
 			      #    building Subsurface
@@ -148,66 +224,69 @@ You can run the following command:
 sudo ldconfig ~/src/install-root/lib
 
 
-Building Subsurface under MacOSX (using Homebrew)
--------------------------------------------------
+Building Subsurface under MacOSX
+--------------------------------
+
+You have 2 options for the first time install, either using homebrew
+or by manually building the dependencies from source, depending on
+what else you have installed on your mac.
 
 0) You need to have XCode installed. The first time (and possibly after updating OSX)
-you need to run
 
-$ xcode-select --install
+0.1) run "xcode-select --install"
 
-1)  Install Homebrew
+homebrew option:
 
-$ ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)"
+1) brew install libzip cmake libusb pkg-config automake libtool hidapi curl libssh2
 
-2) Install needed dependencies
+2) cd <repo>/..; bash <repo>/scripts/build.sh
 
-$ brew install asciidoc libzip sqlite cmake libusb pkg-config automake libtool hidapi libxml2 curl openssl libssh2
 
-3) Make the brew version of sqlite the default
+Manual option:
+1) install pkg-config
 
-$ brew link --force sqlite
+1.1) download http://sourceforge.net/projects/macpkg/files/PkgConfig/0.26/PkgConfig.pkg/download
 
-4) Download and install Qt
+1.2) run "PkgConfig.pkg"
 
-You can build Qt from source or use the prebuilt binaries for Mac. Start
-by downloading the online installer:
+1.3) run "sudo ln -s /opt/pkgconfig/bin/pkg-config /usr/local/bin/pkg-config"
 
-$ curl -L -o ~/Downloads/qt-unified-mac-x64-online.dmg \
-	http://download.qt.io/official_releases/online_installers/qt-unified-mac-x64-online.dmg
-$ open ~/Downloads/qt-unified-mac-x64-online.dmg
+2) install autoconf tools
 
-Double click on the Qt installer shown in the Finder window.
+2.1) curl -OL http://ftpmirror.gnu.org/autoconf/autoconf-latest.tar.gz
 
-In the installer, chose an install folder (the build script we are using
-below assumes that you accept the default of /home/<your username>/Qt), in
-"Select components" select the most recent version and (if you want to
-build Qt from source) be sure you also install the "Source Components".
-To save time and disk space you can unselect Android and IOS packages
-as well as QtWebEngine, Qt3D, Qt Canvas 3D and the Qt Extras.
+2.2) tar -xzf autoconf-latest.tar.gz
 
-If you want to build from source (which takes a very long time and a lot of disk)
+2.3) cd autoconf-*; ./configure && make && sudo make install; cd ..
 
-$ cd ~/Qt/5.5/Src/
+3) cd <repo>/..; bash <repo>/scripts/build.sh -build-deps -desktop
 
-$ ./configure -prefix /usr/local -opensource
-
-$ make -j4
-
-$ make install
-
-5) run the build script
-
-cd ~/src
-bash subsurface/scripts/build.sh
 
 After the above is done, Subsurface.app will be available in the
 subsurface/build directory. You can run Subsurface with the command
 
-$ open subsurface/build/Subsurface.app
+A) open subsurface/build/Subsurface.app
+   this will however not show diagnostic output
 
-or you can move this folder to /Applications to install Subsurface for
-every user.
+B) subsurface/build/Subsurface.app/Contents/MacOS/Subsurface
+   the TAB key is your friend :-)
+   
+Debugging can be done with either Xcode or QtCreator.
+
+To install the app for all users, move subsurface/build/Subsurface.app to /Applications.
+
+
+Cross-building Subsurface on MacOSX for iOS
+-------------------------------------------
+
+1) build SubSurface under MacOSX and iOS
+
+1.1) cd <repo>/..; bash <repo>/scripts/build.sh -build-deps -both
+note: this is mainly done to ensure all external dependencies are downloaded and set
+      to the correct versions
+
+2) continue as described in subsurface/packaging/ios
+
 
 
 Cross-building Subsurface on Linux for Windows
@@ -230,9 +309,14 @@ This is NOT RECOMMENDED. To the best of our knowledge there is one single
 person who regularly does this. The Subsurface team does not provide support
 for Windows binary build from sources natively under Windows...
 
+The lack of a working package management system for Windows makes it
+really painful to build Subsurface natively under Windows,
+so we don't support that at all.
 
-Building Subsurface for Android
--------------------------------
+
+
+Cross-building Subsurface on Linux for Android
+----------------------------------------------
 
 To compile the mobile version you will need:
 
@@ -240,9 +324,9 @@ To compile the mobile version you will need:
 -Android SDK
 -Android NDK
 
-In the packaging/android folder, open the build.sh file and add the paths to the SDK,
-NDK and Qt for android at the top.
+In the folder containing the subsurface source dir run: bash subsurface/packaging/android/android-build-wrapper.sh
+This will download and install the required NDK, SDK and Qt required to build the app.
 
-After that, you can run: ./subsurface/packaging/android/build.sh
+After that, you can run: ./subsurface/packaging/android/build.sh everytime you want to build a new version.
 
-This will generate an apk file in ./subsurface-mobile-build-arm/bin
+This will generate an apk file in ./subsurface-mobile-build-arm/build/outputs/apk/

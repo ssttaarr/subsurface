@@ -1,12 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0
 /* implements Android specific functions */
 #include "dive.h"
 #include "display.h"
+#include "qthelper.h"
 #include <string.h>
 #include <sys/types.h>
 #include <dirent.h>
 #include <fcntl.h>
 #include <libusb.h>
 #include <errno.h>
+#include <unistd.h>
 
 #include <QtAndroidExtras/QtAndroidExtras>
 #include <QtAndroidExtras/QAndroidJniObject>
@@ -50,7 +53,7 @@ static const char *system_default_path_append(const char *append)
 	if (append)
 		path += QString("/%1").arg(append);
 
-	return strdup(path.toUtf8().data());
+	return copy_qstring(path);
 }
 
 const char *system_default_directory(void)
@@ -176,6 +179,11 @@ int subsurface_access(const char *path, int mode)
 	return access(path, mode);
 }
 
+int subsurface_stat(const char* path, struct stat* buf)
+{
+	return stat(path, buf);
+}
+
 struct zip *subsurface_zip_open_readonly(const char *path, int flags, int *errorp)
 {
 	return zip_open(path, flags, errorp);
@@ -187,10 +195,8 @@ int subsurface_zip_close(struct zip *zip)
 }
 
 /* win32 console */
-void subsurface_console_init(bool dedicated, bool logfile)
+void subsurface_console_init(void)
 {
-	(void)dedicated;
-	(void)logfile;
 	/* NOP */
 }
 

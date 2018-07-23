@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <QShortcut>
 #include <QMessageBox>
 #include <QSettings>
@@ -8,7 +9,7 @@
 #include "desktop-widgets/subsurfacewebservices.h"
 #include "desktop-widgets/updatemanager.h"
 
-#include "core/helpers.h"
+#include "core/qthelper.h"
 #include "core/subsurfacesysinfo.h"
 
 UserSurvey::UserSurvey(QWidget *parent) : QDialog(parent),
@@ -125,7 +126,7 @@ void UserSurvey::requestReceived()
 	}
 
 	msgbox.setWindowTitle(msgTitle);
-	msgbox.setWindowIcon(QIcon(":/subsurface-icon"));
+	msgbox.setWindowIcon(QIcon(":subsurface-icon"));
 	msgbox.setText(msgText);
 	msgbox.setTextFormat(Qt::RichText);
 	msgbox.exec();

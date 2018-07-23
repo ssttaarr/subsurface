@@ -1,16 +1,19 @@
+// SPDX-License-Identifier: GPL-2.0
 #ifndef TEMPLATELAYOUT_H
 #define TEMPLATELAYOUT_H
 
+#include <QStringList>
 #include <grantlee_templates.h>
 #include "mainwindow.h"
 #include "printoptions.h"
 #include "core/statistics.h"
 #include "core/qthelper.h"
-#include "core/helpers.h"
 #include "core/subsurface-qt/DiveObjectHelper.h"
 
 int getTotalWork(print_options *printOptions);
 void find_all_templates();
+void set_bundled_templates_as_read_only();
+void copy_bundled_templates(QString src, QString dst, QStringList *templateBackupList);
 
 extern QList<QString> grantlee_templates, grantlee_statistics_templates;
 
@@ -100,15 +103,12 @@ if (property == "year") {
 } else if (property == "dives") {
 	return object.year->selection_size;
 } else if (property == "min_temp") {
-	const char *unit;
-	double temp = get_temp_units(object.year->min_temp, &unit);
-	return object.year->min_temp == 0 ? "0" : QString::number(temp, 'g', 2) + unit;
+	return object.year->min_temp.mkelvin == 0 ? "0" : get_temperature_string(object.year->min_temp, true);
 } else if (property == "max_temp") {
-	const char *unit;
-	double temp = get_temp_units(object.year->max_temp, &unit);
-	return object.year->max_temp == 0 ? "0" : QString::number(temp, 'g', 2) + unit;
+	return object.year->max_temp.mkelvin == 0 ? "0" : get_temperature_string(object.year->max_temp, true);
 } else if (property == "total_time") {
-	return get_time_string(object.year->total_time.seconds, 0);
+	return get_dive_duration_string(object.year->total_time.seconds, gettextFromC::tr("h"),
+									gettextFromC::tr("min"), gettextFromC::tr("sec"), " ");
 } else if (property == "avg_time") {
 	return get_minutes(object.year->total_time.seconds / object.year->selection_size);
 } else if (property == "shortest_time") {

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "printdialog.h"
 #include "printoptions.h"
 #include "mainwindow.h"
@@ -51,6 +52,7 @@ PrintDialog::PrintDialog(QWidget *parent, Qt::WindowFlags f) :
 	templateOptions.font_size = s.value("font_size", 9).toDouble();
 	templateOptions.color_palette_index = s.value("color_palette", SSRF_COLORS).toInt();
 	templateOptions.line_spacing = s.value("line_spacing", 1).toDouble();
+	templateOptions.border_width = s.value("border_width", 1).toInt();
 	custom_colors.color1 = QColor(s.value("custom_color_1", ssrf_colors.color1).toString());
 	custom_colors.color2 = QColor(s.value("custom_color_2", ssrf_colors.color2).toString());
 	custom_colors.color3 = QColor(s.value("custom_color_3", ssrf_colors.color3).toString());
@@ -148,6 +150,7 @@ void PrintDialog::onFinished()
 	s.setValue("font_size", templateOptions.font_size);
 	s.setValue("color_palette", templateOptions.color_palette_index);
 	s.setValue("line_spacing", templateOptions.line_spacing);
+	s.setValue("border_width", templateOptions.border_width);
 
 	// save custom colors
 	s.setValue("custom_color_1", custom_colors.color1.name());
@@ -188,9 +191,8 @@ void PrintDialog::printClicked(void)
 	}
 }
 
-void PrintDialog::onPaintRequested(QPrinter *printerPtr)
+void PrintDialog::onPaintRequested(QPrinter*)
 {
-	Q_UNUSED(printerPtr)
 	createPrinterObj();
 	connect(printer, SIGNAL(progessUpdated(int)), progressBar, SLOT(setValue(int)));
 	printer->print();

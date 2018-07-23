@@ -1,5 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0
+#ifdef __clang__
 // Clang has a bug on zero-initialization of C structs.
 #pragma clang diagnostic ignored "-Wmissing-field-initializers"
+#endif
 
 #include <stdarg.h>
 #include <stdlib.h>
@@ -49,7 +52,7 @@ static void oom(void)
 	exit(1);
 }
 
-static void make_room(struct membuffer *b, unsigned int size)
+void make_room(struct membuffer *b, unsigned int size)
 {
 	unsigned int needed = b->len + size;
 	if (needed > b->alloc) {
@@ -138,6 +141,15 @@ void put_format(struct membuffer *b, const char *fmt, ...)
 	va_end(args);
 }
 
+void put_format_loc(struct membuffer *b, const char *fmt, ...)
+{
+	va_list args;
+
+	va_start(args, fmt);
+	put_vformat_loc(b, fmt, args);
+	va_end(args);
+}
+
 void put_milli(struct membuffer *b, const char *pre, int value, const char *post)
 {
 	int i;
@@ -210,7 +222,7 @@ void put_quoted(struct membuffer *b, const char *text, int is_attribute, int is_
 {
 	const char *p = text;
 
-	for (;;) {
+	for (;text;) {
 		const char *escape;
 
 		switch (*p++) {

@@ -1,5 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "desktop-widgets/updatemanager.h"
-#include "core/helpers.h"
 #include "core/qthelper.h"
 #include <QtNetwork>
 #include <QMessageBox>
@@ -100,10 +100,9 @@ void UpdateManager::requestReceived()
 			msgbox.setIcon(QMessageBox::Warning);
 		}
 	}
-#ifndef SUBSURFACE_MOBILE
 	if (haveNewVersion || !isAutomaticCheck) {
 		msgbox.setWindowTitle(msgTitle);
-		msgbox.setWindowIcon(QIcon(":/subsurface-icon"));
+		msgbox.setWindowIcon(QIcon(":subsurface-icon"));
 		msgbox.setText(msgText);
 		msgbox.setTextFormat(Qt::RichText);
 		msgbox.exec();
@@ -115,7 +114,7 @@ void UpdateManager::requestReceived()
 			// we allow an opt out of future checks
 			QMessageBox response(MainWindow::instance());
 			QString message = tr("Subsurface is checking every two weeks if a new version is available. "
-								 "\n If you don't want Subsurface to continue checking, please click Decline.");
+								 "\nIf you don't want Subsurface to continue checking, please click Decline.");
 			response.addButton(tr("Decline"), QMessageBox::RejectRole);
 			response.addButton(tr("Accept"), QMessageBox::AcceptRole);
 			response.setText(message);
@@ -125,5 +124,4 @@ void UpdateManager::requestReceived()
 			update_settings->setDontCheckForUpdates(response.exec() != QMessageBox::Accepted);
 		}
 	}
-#endif
 }

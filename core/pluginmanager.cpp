@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "pluginmanager.h"
 
 #include <QApplication>
@@ -6,6 +7,9 @@
 #include <QDebug>
 
 static QList<ISocialNetworkIntegration*> _socialNetworks;
+
+// no point in including dive.h for this
+extern int verbose;
 
 PluginManager& PluginManager::instance()
 {
@@ -33,7 +37,9 @@ void PluginManager::loadPlugins()
 #endif
 	pluginsDir.cd("plugins");
 
-	qDebug() << "Plugins Directory: " << pluginsDir;
+	if (verbose)
+		qDebug() << "Plugins Directory: " << pluginsDir;
+
 	foreach (const QString& fileName, pluginsDir.entryList(QDir::Files)) {
 		QPluginLoader loader(pluginsDir.absoluteFilePath(fileName));
 		QObject *plugin = loader.instance();
@@ -45,9 +51,4 @@ void PluginManager::loadPlugins()
 			_socialNetworks.push_back(social);
 		}
 	}
-}
-
-QList<ISocialNetworkIntegration*> PluginManager::socialNetworkIntegrationPlugins() const
-{
-	return _socialNetworks;
 }

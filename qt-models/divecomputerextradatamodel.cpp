@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "qt-models/divecomputerextradatamodel.h"
 #include "core/dive.h"
 #include "core/metrics.h"
@@ -49,9 +50,8 @@ QVariant ExtraDataModel::data(const QModelIndex &index, int role) const
 	return ret;
 }
 
-int ExtraDataModel::rowCount(const QModelIndex &parent) const
+int ExtraDataModel::rowCount(const QModelIndex&) const
 {
-	Q_UNUSED(parent);
 	return rows;
 }
 

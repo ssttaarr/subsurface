@@ -1,5 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "qt-models/gpslistmodel.h"
-#include "core/helpers.h"
+#include "core/qthelper.h"
 #include <QVector>
 
 GpsListModel *GpsListModel::m_instance = NULL;
@@ -7,13 +8,6 @@ GpsListModel *GpsListModel::m_instance = NULL;
 GpsListModel::GpsListModel(QObject *parent) : QAbstractListModel(parent)
 {
 	m_instance = this;
-}
-
-void GpsListModel::addGpsFix(gpsTracker g)
-{
-	beginInsertColumns(QModelIndex(), rowCount(), rowCount());
-	m_gpsFixes.append(g);
-	endInsertRows();
 }
 
 void GpsListModel::update()
@@ -33,9 +27,8 @@ void GpsListModel::clear()
 	}
 }
 
-int GpsListModel::rowCount(const QModelIndex &parent) const
+int GpsListModel::rowCount(const QModelIndex&) const
 {
-	Q_UNUSED(parent);
 	return m_gpsFixes.count();
 }
 

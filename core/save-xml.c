@@ -1,5 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0
+#ifdef __clang__
 // Clang has a bug on zero-initialization of C structs.
 #pragma clang diagnostic ignored "-Wmissing-field-initializers"
+#endif
 
 #include <stdio.h>
 #include <ctype.h>
@@ -11,12 +14,13 @@
 #include <fcntl.h>
 
 #include "dive.h"
+#include "subsurface-string.h"
 #include "divelist.h"
 #include "device.h"
 #include "membuffer.h"
 #include "strndup.h"
 #include "git-access.h"
-#include "qthelperfromc.h"
+#include "qthelper.h"
 
 /*
  * We're outputting utf8 in xml.
@@ -156,6 +160,8 @@ static void save_cylinder_info(struct membuffer *b, struct dive *dive)
 		put_pressure(b, cylinder->end, " end='", " bar'");
 		if (cylinder->cylinder_use != OC_GAS)
 			show_utf8(b, cylinderuse_text[cylinder->cylinder_use], " use='", "'", 1);
+		if (cylinder->depth.mm != 0)
+			put_milli(b, " depth='", cylinder->depth.mm, " m'");
 		put_format(b, " />\n");
 	}
 }
@@ -189,24 +195,45 @@ static void show_index(struct membuffer *b, int value, const char *pre, const ch
 		show_integer(b, value, pre, post);
 }
 
-static void save_sample(struct membuffer *b, struct sample *sample, struct sample *old)
+static void save_sample(struct membuffer *b, struct sample *sample, struct sample *old, int o2sensor)
 {
+	int idx;
+
 	put_format(b, "  <sample time='%u:%02u min'", FRACTION(sample->time.seconds, 60));
 	put_milli(b, " depth='", sample->depth.mm, " m'");
 	if (sample->temperature.mkelvin && sample->temperature.mkelvin != old->temperature.mkelvin) {
 		put_temperature(b, sample->temperature, " temp='", " C'");
 		old->temperature = sample->temperature;
 	}
-	put_pressure(b, sample->cylinderpressure, " pressure='", " bar'");
-	put_pressure(b, sample->o2cylinderpressure, " o2pressure='", " bar'");
 
 	/*
 	 * We only show sensor information for samples with pressure, and only if it
 	 * changed from the previous sensor we showed.
 	 */
-	if (sample->cylinderpressure.mbar && sample->sensor != old->sensor) {
-		put_format(b, " sensor='%d'", sample->sensor);
-		old->sensor = sample->sensor;
+	for (idx = 0; idx < MAX_SENSORS; idx++) {
+		pressure_t p = sample->pressure[idx];
+		int sensor = sample->sensor[idx];
+
+		if (!p.mbar)
+			continue;
+
+		/* Legacy o2pressure format? */
+		if (o2sensor >= 0) {
+			if (sensor == o2sensor) {
+				put_pressure(b, p, " o2pressure='", " bar'");
+				continue;
+			}
+			put_pressure(b, p, " pressure='", " bar'");
+			if (sensor != old->sensor[0]) {
+				put_format(b, " sensor='%d'", sensor);
+				old->sensor[0] = sensor;
+			}
+			continue;
+		}
+
+		/* The new-style format is much simpler: the sensor is always encoded */
+		put_format(b, " pressure%d=", sensor);
+		put_pressure(b, p, "'", " bar'");
 	}
 
 	/* the deco/ndl values are stored whenever they change */
@@ -258,8 +285,14 @@ static void save_sample(struct membuffer *b, struct sample *sample, struct sampl
 		put_milli(b, " po2='", sample->setpoint.mbar, " bar'");
 		old->setpoint = sample->setpoint;
 	}
-	show_index(b, sample->heartbeat, "heartbeat='", "'");
-	show_index(b, sample->bearing.degrees, "bearing='", "'");
+	if (sample->heartbeat != old->heartbeat) {
+		show_index(b, sample->heartbeat, "heartbeat='", "'");
+		old->heartbeat = sample->heartbeat;
+	}
+	if (sample->bearing.degrees != old->bearing.degrees) {
+		show_index(b, sample->bearing.degrees, "bearing='", "'");
+		old->bearing.degrees = sample->bearing.degrees;
+	}
 	put_format(b, " />\n");
 }
 
@@ -268,7 +301,10 @@ static void save_one_event(struct membuffer *b, struct dive *dive, struct event 
 	put_format(b, "  <event time='%d:%02d min'", FRACTION(ev->time.seconds, 60));
 	show_index(b, ev->type, "type='", "'");
 	show_index(b, ev->flags, "flags='", "'");
-	show_index(b, ev->value, "value='", "'");
+	if (!strcmp(ev->name,"modechange"))
+		show_utf8(b, divemode_text[ev->value], " divemode='", "'",1);
+	else
+		show_index(b, ev->value, "value='", "'");
 	show_utf8(b, ev->name, " name='", "'", 1);
 	if (event_is_gaschange(ev)) {
 		struct gasmix *mix = get_gasmix_from_event(dive, ev);
@@ -324,16 +360,29 @@ static void show_date(struct membuffer *b, timestamp_t when)
 
 	put_format(b, " date='%04u-%02u-%02u'",
 		   tm.tm_year, tm.tm_mon + 1, tm.tm_mday);
-	put_format(b, " time='%02u:%02u:%02u'",
-		   tm.tm_hour, tm.tm_min, tm.tm_sec);
+	if (tm.tm_hour || tm.tm_min || tm.tm_sec)
+		put_format(b, " time='%02u:%02u:%02u'",
+			   tm.tm_hour, tm.tm_min, tm.tm_sec);
 }
 
-static void save_samples(struct membuffer *b, int nr, struct sample *s)
+static void save_samples(struct membuffer *b, struct dive *dive, struct divecomputer *dc)
 {
-	struct sample dummy = {};
+	int nr;
+	int o2sensor;
+	struct sample *s;
+	struct sample dummy = { .bearing.degrees = -1, .ndl.seconds = -1 };
 
+	/* Set up default pressure sensor indexes */
+	o2sensor = legacy_format_o2pressures(dive, dc);
+	if (o2sensor >= 0) {
+		dummy.sensor[0] = !o2sensor;
+		dummy.sensor[1] = o2sensor;
+	}
+
+	s = dc->sample;
+	nr = dc->samples;
 	while (--nr >= 0) {
-		save_sample(b, s, &dummy);
+		save_sample(b, s, &dummy, o2sensor);
 		s++;
 	}
 }
@@ -342,6 +391,8 @@ static void save_dc(struct membuffer *b, struct dive *dive, struct divecomputer 
 {
 	put_format(b, "  <divecomputer");
 	show_utf8(b, dc->model, " model='", "'", 1);
+	if (dc->last_manual_time.seconds)
+		put_duration(b, dc->last_manual_time, " last-manual-time='", " min'");
 	if (dc->deviceid)
 		put_format(b, " deviceid='%08x'", dc->deviceid);
 	if (dc->diveid)
@@ -351,7 +402,7 @@ static void save_dc(struct membuffer *b, struct dive *dive, struct divecomputer 
 	if (dc->duration.seconds && dc->duration.seconds != dive->dc.duration.seconds)
 		put_duration(b, dc->duration, " duration='", " min'");
 	if (dc->divemode != OC) {
-		for (enum dive_comp_type i = 0; i < NUM_DC_TYPE; i++)
+		for (enum divemode_t i = 0; i < NUM_DIVEMODE; i++)
 			if (dc->divemode == i)
 				show_utf8(b, divemode_text[i], " dctype='", "'", 1);
 		if (dc->no_o2sensors)
@@ -365,7 +416,7 @@ static void save_dc(struct membuffer *b, struct dive *dive, struct divecomputer 
 	put_duration(b, dc->surfacetime, "  <surfacetime>", " min</surfacetime>\n");
 	save_extra_data(b, dc->extra_data);
 	save_events(b, dive, dc->events);
-	save_samples(b, dc->samples, dc->sample);
+	save_samples(b, dive, dc);
 
 	put_format(b, "  </divecomputer>\n");
 }
@@ -388,8 +439,6 @@ static void save_picture(struct membuffer *b, struct picture *pic)
 		put_degrees(b, pic->latitude, " gps='", " ");
 		put_degrees(b, pic->longitude, "", "'");
 	}
-	if (hashstring(pic->filename))
-		put_format(b, " hash='%s'", hashstring(pic->filename));
 
 	put_string(b, "/>\n");
 }
@@ -415,8 +464,11 @@ void save_one_dive_to_mb(struct membuffer *b, struct dive *dive)
 			fprintf(stderr, "removed reference to non-existant dive site with uuid %08x\n", dive->dive_site_uuid);
 	}
 	show_date(b, dive->when);
-	put_format(b, " duration='%u:%02u min'>\n",
-		   FRACTION(dive->dc.duration.seconds, 60));
+	if (dive->dc.duration.seconds > 0)
+		put_format(b, " duration='%u:%02u min'>\n",
+			   FRACTION(dive->dc.duration.seconds, 60));
+	else
+		put_format(b, ">\n");
 	save_overview(b, dive);
 	save_cylinder_info(b, dive);
 	save_weightsystem_info(b, dive);
@@ -525,7 +577,7 @@ void save_dives_buffer(struct membuffer *b, const bool select_only)
 		int j;
 		struct dive *d;
 		struct dive_site *ds = get_dive_site(i);
-		if (dive_site_is_empty(ds)) {
+		if (dive_site_is_empty(ds) || !is_dive_site_used(ds->uuid, false)) {
 			for_each_dive(j, d) {
 				if (d->dive_site_uuid == ds->uuid)
 					d->dive_site_uuid = 0;
@@ -573,7 +625,7 @@ void save_dives_buffer(struct membuffer *b, const bool select_only)
 	}
 	put_format(b, "</divesites>\n<dives>\n");
 	for (trip = dive_trip_list; trip != NULL; trip = trip->next)
-		trip->index = 0;
+		trip->saved = 0;
 
 	/* save the dives */
 	for_each_dive(i, dive) {
@@ -593,11 +645,11 @@ void save_dives_buffer(struct membuffer *b, const bool select_only)
 			}
 
 			/* Have we already seen this trip (and thus saved this dive?) */
-			if (trip->index)
+			if (trip->saved)
 				continue;
 
 			/* We haven't seen this trip before - save it and all dives */
-			trip->index = 1;
+			trip->saved = 1;
 			save_trip(b, trip);
 		}
 	}
@@ -667,7 +719,7 @@ int save_dives_logic(const char *filename, const bool select_only)
 	FILE *f;
 	void *git;
 	const char *branch, *remote;
-	int error;
+	int error = 0;
 
 	git = is_git_repository(filename, &branch, &remote, false);
 	if (git)

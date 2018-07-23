@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #ifndef DIVEPICTUREMODEL_H
 #define DIVEPICTUREMODEL_H
 
@@ -5,17 +6,13 @@
 #include <QImage>
 #include <QFuture>
 
-struct PhotoHelper {
+struct PictureEntry {
+	int diveId;
+	struct picture *picture;
+	QString filename;
 	QImage image;
 	int offsetSeconds;
 };
-
-typedef QList<struct picture *> SPictureList;
-typedef struct picture *picturepointer;
-typedef QPair<picturepointer, QImage> SPixmap;
-
-// function that will scale the pixmap, used inside the QtConcurrent thread.
-SPixmap scaleImages(picturepointer picture);
 
 class DivePictureModel : public QAbstractTableModel {
 	Q_OBJECT
@@ -25,16 +22,21 @@ public:
 	virtual QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const;
 	virtual int rowCount(const QModelIndex &parent = QModelIndex()) const;
 	virtual void updateDivePictures();
-	void updateDivePicturesWhenDone(QList<QFuture<void> >);
-	void removePicture(const QString& fileUrl, bool last);
-
-protected:
+	void removePictures(const QVector<QString> &fileUrls);
+	void updateDivePictureOffset(int diveId, const QString &filename, int offsetSeconds);
+signals:
+	void picturesRemoved(const QVector<QString> &fileUrls);
+public slots:
+	void setZoomLevel(int level);
+	void updateThumbnail(QString filename, QImage thumbnail);
+private:
 	DivePictureModel();
-	int numberOfPictures;
-	// Currently, load the images on the fly
-	// Later, use a thread to load the images
-	// Later, save the thumbnails so we don't need to reopen every time.
-	QHash<QString, PhotoHelper> stringPixmapCache;
+	QVector<PictureEntry> pictures;
+	int findPictureId(const QString &filename);	// Return -1 if not found
+	double zoomLevel;	// -1.0: minimum, 0.0: standard, 1.0: maximum
+	int size;
+	void updateThumbnails();
+	void updateZoom();
 };
 
 #endif

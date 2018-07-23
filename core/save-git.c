@@ -1,6 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
+#ifdef __clang__
 // Clang has a bug on zero-initialization of C structs.
 #pragma clang diagnostic ignored "-Wmissing-field-initializers"
+#endif
 
+#include "ssrf.h"
 #include <stdio.h>
 #include <ctype.h>
 #include <string.h>
@@ -14,12 +18,14 @@
 #include <git2.h>
 
 #include "dive.h"
+#include "subsurface-string.h"
 #include "divelist.h"
 #include "device.h"
 #include "membuffer.h"
 #include "git-access.h"
 #include "version.h"
-#include "qthelperfromc.h"
+#include "qthelper.h"
+#include "gettext.h"
 
 #define VA_BUF(b, fmt) do { va_list args; va_start(args, fmt); put_vformat(b, fmt, args); va_end(args); } while (0)
 
@@ -153,7 +159,8 @@ static void save_cylinder_info(struct membuffer *b, struct dive *dive)
 		put_pressure(b, cylinder->end, " end=", "bar");
 		if (cylinder->cylinder_use != OC_GAS)
 			put_format(b, " use=%s", cylinderuse_text[cylinder->cylinder_use]);
-
+		if (cylinder->depth.mm != 0)
+			put_milli(b, " depth=", cylinder->depth.mm, "m");
 		put_string(b, "\n");
 	}
 }
@@ -237,21 +244,45 @@ static void show_index(struct membuffer *b, int value, const char *pre, const ch
  *
  * For parsing, look at the units to figure out what the numbers are.
  */
-static void save_sample(struct membuffer *b, struct sample *sample, struct sample *old)
+static void save_sample(struct membuffer *b, struct sample *sample, struct sample *old, int o2sensor)
 {
+	int idx;
+
 	put_format(b, "%3u:%02u", FRACTION(sample->time.seconds, 60));
 	put_milli(b, " ", sample->depth.mm, "m");
 	put_temperature(b, sample->temperature, " ", "°C");
-	put_pressure(b, sample->cylinderpressure, " ", "bar");
-	put_pressure(b, sample->o2cylinderpressure," o2pressure=","bar");
 
-	/*
-	 * We only show sensor information for samples with pressure, and only if it
-	 * changed from the previous sensor we showed.
-	 */
-	if (sample->cylinderpressure.mbar && sample->sensor != old->sensor) {
-		put_format(b, " sensor=%d", sample->sensor);
-		old->sensor = sample->sensor;
+	for (idx = 0; idx < MAX_SENSORS; idx++) {
+		pressure_t p = sample->pressure[idx];
+		int sensor = sample->sensor[idx];
+
+		if (!p.mbar)
+			continue;
+
+		/* Old-style "o2sensor" syntax for CCR dives? */
+		if (o2sensor >= 0) {
+			if (sensor == o2sensor) {
+				put_pressure(b, sample->pressure[1]," o2pressure=","bar");
+				continue;
+			}
+
+			put_pressure(b, p, " ", "bar");
+
+			/*
+			 * Note: regardless of which index we used for the non-O2
+			 * sensor, we know there is only one non-O2 sensor in legacy
+			 * mode, and "old->sensor[0]" contains that index.
+			 */
+			if (sensor != old->sensor[0]) {
+				put_format(b, " sensor=%d", sensor);
+				old->sensor[0] = sensor;
+			}
+			continue;
+		}
+
+		/* The new-style format is much simpler: the sensor is always encoded */
+		put_pressure(b, p, " ", "bar");
+		put_format(b, ":%d", sensor);
 	}
 
 	/* the deco/ndl values are stored whenever they change */
@@ -282,8 +313,10 @@ static void save_sample(struct membuffer *b, struct sample *sample, struct sampl
 		old->cns = sample->cns;
 	}
 
-	if (sample->rbt.seconds)
+	if (sample->rbt.seconds != old->rbt.seconds) {
 		put_format(b, " rbt=%u:%02u", FRACTION(sample->rbt.seconds, 60));
+		old->rbt.seconds = sample->rbt.seconds;
+	}
 
 	if (sample->o2sensor[0].mbar != old->o2sensor[0].mbar) {
 		put_milli(b, " sensor1=", sample->o2sensor[0].mbar, "bar");
@@ -304,17 +337,35 @@ static void save_sample(struct membuffer *b, struct sample *sample, struct sampl
 		put_milli(b, " po2=", sample->setpoint.mbar, "bar");
 		old->setpoint = sample->setpoint;
 	}
-	show_index(b, sample->heartbeat, "heartbeat=", "");
-	show_index(b, sample->bearing.degrees, "bearing=", "°");
+	if (sample->heartbeat != old->heartbeat) {
+		show_index(b, sample->heartbeat, "heartbeat=", "");
+		old->heartbeat = sample->heartbeat;
+	}
+	if (sample->bearing.degrees != old->bearing.degrees) {
+		show_index(b, sample->bearing.degrees, "bearing=", "°");
+		old->bearing.degrees = sample->bearing.degrees;
+	}
 	put_format(b, "\n");
 }
 
-static void save_samples(struct membuffer *b, int nr, struct sample *s)
+static void save_samples(struct membuffer *b, struct dive *dive, struct divecomputer *dc)
 {
-	struct sample dummy = {};
+	int nr;
+	int o2sensor;
+	struct sample *s;
+	struct sample dummy = { .bearing.degrees = -1, .ndl.seconds = -1 };
 
+	/* Is this a CCR dive with the old-style "o2pressure" sensor? */
+	o2sensor = legacy_format_o2pressures(dive, dc);
+	if (o2sensor >= 0) {
+		dummy.sensor[0] = !o2sensor;
+		dummy.sensor[1] = o2sensor;
+	}
+
+	s = dc->sample;
+	nr = dc->samples;
 	while (--nr >= 0) {
-		save_sample(b, s, &dummy);
+		save_sample(b, s, &dummy, o2sensor);
 		s++;
 	}
 }
@@ -324,7 +375,11 @@ static void save_one_event(struct membuffer *b, struct dive *dive, struct event 
 	put_format(b, "event %d:%02d", FRACTION(ev->time.seconds, 60));
 	show_index(b, ev->type, "type=", "");
 	show_index(b, ev->flags, "flags=", "");
-	show_index(b, ev->value, "value=", "");
+
+	if (!strcmp(ev->name,"modechange"))
+		show_utf8(b, " divemode=", divemode_text[ev->value], "");
+	else
+		show_index(b, ev->value, "value=", "");
 	show_utf8(b, " name=", ev->name, "");
 	if (event_is_gaschange(ev)) {
 		struct gasmix *mix = get_gasmix_from_event(dive, ev);
@@ -346,6 +401,8 @@ static void save_events(struct membuffer *b, struct dive *dive, struct event *ev
 static void save_dc(struct membuffer *b, struct dive *dive, struct divecomputer *dc)
 {
 	show_utf8(b, "model ", dc->model, "\n");
+	if (dc->last_manual_time.seconds)
+		put_duration(b, dc->last_manual_time, "lastmanualtime ", "min\n");
 	if (dc->deviceid)
 		put_format(b, "deviceid %08x\n", dc->deviceid);
 	if (dc->diveid)
@@ -367,7 +424,7 @@ static void save_dc(struct membuffer *b, struct dive *dive, struct divecomputer 
 
 	save_extra_data(b, dc->extra_data);
 	save_events(b, dive, dc->events);
-	save_samples(b, dc->samples, dc->sample);
+	save_samples(b, dive, dc);
 }
 
 /*
@@ -376,7 +433,8 @@ static void save_dc(struct membuffer *b, struct dive *dive, struct divecomputer 
  */
 static void create_dive_buffer(struct dive *dive, struct membuffer *b)
 {
-	put_format(b, "duration %u:%02u min\n", FRACTION(dive->dc.duration.seconds, 60));
+	if (dive->dc.duration.seconds > 0)
+		put_format(b, "duration %u:%02u min\n", FRACTION(dive->dc.duration.seconds, 60));
 	SAVE("rating", rating);
 	SAVE("visibility", visibility);
 	cond_put_format(dive->tripflag == NO_TRIP, b, "notrip\n");
@@ -391,42 +449,6 @@ static void create_dive_buffer(struct dive *dive, struct membuffer *b)
 	save_dive_temperature(b, dive);
 }
 
-static struct membuffer error_string_buffer = { 0 };
-
-/*
- * Note that the act of "getting" the error string
- * buffer doesn't de-allocate the buffer, but it does
- * set the buffer length to zero, so that any future
- * error reports will overwrite the string rather than
- * append to it.
- */
-const char *get_error_string(void)
-{
-	const char *str;
-
-	if (!error_string_buffer.len)
-		return "";
-	str = mb_cstring(&error_string_buffer);
-	error_string_buffer.len = 0;
-	return str;
-}
-
-int report_error(const char *fmt, ...)
-{
-	struct membuffer *buf = &error_string_buffer;
-
-	/* Previous unprinted errors? Add a newline in between */
-	if (buf->len)
-		put_bytes(buf, "\n", 1);
-	VA_BUF(buf, fmt);
-	mb_cstring(buf);
-	return -1;
-}
-
-void report_message(const char *msg)
-{
-	(void)report_error("%s", msg);
-}
 
 /*
  * libgit2 has a "git_treebuilder" concept, but it's broken, and can not
@@ -461,6 +483,12 @@ static int tree_insert(git_treebuilder *dir, const char *name, int mkunique, git
 	}
 	ret = git_treebuilder_insert(NULL, dir, name, id, mode);
 	free_buffer(&uniquename);
+	if (ret) {
+		const git_error *gerr = giterr_last();
+		if (gerr) {
+			fprintf(stderr, "tree_insert failed with return %d error %s\n", ret, gerr->message);
+		}
+	}
 	return ret;
 }
 
@@ -583,11 +611,9 @@ static int save_one_picture(git_repository *repo, struct dir *dir, struct pictur
 	struct membuffer buf = { 0 };
 	char sign = '+';
 	unsigned h;
-	int error;
 
 	show_utf8(&buf, "filename ", pic->filename, "\n");
 	show_gps(&buf, pic->latitude, pic->longitude);
-	show_utf8(&buf, "hash ", pic->hash, "\n");
 
 	/* Picture loading will load even negative offsets.. */
 	if (offset < 0) {
@@ -598,21 +624,8 @@ static int save_one_picture(git_repository *repo, struct dir *dir, struct pictur
 	/* Use full hh:mm:ss format to make it all sort nicely */
 	h = offset / 3600;
 	offset -= h *3600;
-	error = blob_insert(repo, dir, &buf, "%c%02u=%02u=%02u",
+	return blob_insert(repo, dir, &buf, "%c%02u=%02u=%02u",
 		sign, h, FRACTION(offset, 60));
-#if 0
-	/* storing pictures into git was a mistake. This makes for HUGE git repositories */
-	if (!error) {
-		/* next store the actual picture; we prefix all picture names
-		 * with "PIC-" to make things easier on the parsing side */
-		struct membuffer namebuf = { 0 };
-		const char *localfn = local_file_path(pic);
-		put_format(&namebuf, "PIC-%s", pic->hash);
-		error = blob_insert_fromdisk(repo, dir, localfn, mb_cstring(&namebuf));
-		free((void *)localfn);
-	}
-#endif
-	return error;
 }
 
 static int save_pictures(git_repository *repo, struct dir *dir, struct dive *dive)
@@ -881,11 +894,12 @@ static void save_divesites(git_repository *repo, struct dir *tree)
 	struct membuffer dirname = { 0 };
 	put_format(&dirname, "01-Divesites");
 	subdir = new_directory(repo, tree, &dirname);
+	free_buffer(&dirname);
 
 	for (int i = 0; i < dive_site_table.nr; i++) {
 		struct membuffer b = { 0 };
 		struct dive_site *ds = get_dive_site(i);
-		if (dive_site_is_empty(ds)) {
+		if (dive_site_is_empty(ds) || !is_dive_site_used(ds->uuid, false)) {
 			int j;
 			struct dive *d;
 			for_each_dive(j, d) {
@@ -924,6 +938,7 @@ static void save_divesites(git_repository *repo, struct dir *tree)
 			}
 		}
 		blob_insert(repo, subdir, &b, mb_cstring(&site_file_name));
+		free_buffer(&site_file_name);
 	}
 }
 
@@ -933,16 +948,16 @@ static int create_git_tree(git_repository *repo, struct dir *root, bool select_o
 	struct dive *dive;
 	dive_trip_t *trip;
 
-	git_storage_update_progress(false, "start create git tree");
+	git_storage_update_progress(translate("gettextFromC", "Start saving data"));
 	save_settings(repo, root);
 
 	save_divesites(repo, root);
 
 	for (trip = dive_trip_list; trip != NULL; trip = trip->next)
-		trip->index = 0;
+		trip->saved = 0;
 
 	/* save the dives */
-	git_storage_update_progress(false, "start saving dives");
+	git_storage_update_progress(translate("gettextFromC", "Start saving dives"));
 	for_each_dive(i, dive) {
 		struct tm tm;
 		struct dir *tree;
@@ -964,9 +979,9 @@ static int create_git_tree(git_repository *repo, struct dir *root, bool select_o
 
 		if (trip) {
 			/* Did we already save this trip? */
-			if (trip->index)
+			if (trip->saved)
 				continue;
-			trip->index = 1;
+			trip->saved = 1;
 
 			/* Pass that new subdirectory in for save-trip */
 			save_one_trip(repo, tree, trip, &tm, cached_ok);
@@ -975,7 +990,7 @@ static int create_git_tree(git_repository *repo, struct dir *root, bool select_o
 
 		save_one_dive(repo, tree, dive, &tm, cached_ok);
 	}
-	git_storage_update_progress(false, "done creating git tree");
+	git_storage_update_progress(translate("gettextFromC", "Done creating local cache"));
 	return 0;
 }
 
@@ -1003,11 +1018,11 @@ static int notify_cb(git_checkout_notify_t why,
 	const git_diff_file *workdir,
 	void *payload)
 {
-	(void) baseline;
-	(void) target;
-	(void) workdir;
-	(void) payload;
-	(void) why;
+	UNUSED(baseline);
+	UNUSED(target);
+	UNUSED(workdir);
+	UNUSED(payload);
+	UNUSED(why);
 	report_error("File '%s' does not match in working tree", path);
 	return 0; /* Continue with checkout */
 }
@@ -1039,24 +1054,29 @@ static int get_authorship(git_repository *repo, git_signature **authorp)
 	if (git_signature_default(authorp, repo) == 0)
 		return 0;
 #endif
-	/* Default name information, with potential OS overrides */
-	struct user_info user = {
-		.name = "Subsurface",
-		.email = "subsurace@subsurface-divelog.org"
-	};
-
+	/* try to fetch the user info from the OS, otherwise use default values. */
+	struct user_info user = { .name = NULL, .email = NULL };
 	subsurface_user_info(&user);
+	if (!user.name)
+		user.name = strdup("Subsurface");
+	if (!user.email)
+		user.email = strdup("subsurface-app-account@subsurface-divelog.org");
 
 	/* git_signature_default() is too recent */
-	return git_signature_now(authorp, user.name, user.email);
+	int ret = git_signature_now(authorp, user.name, user.email);
+	free((void *)user.name);
+	free((void *)user.email);
+	return ret;
 }
 
-static void create_commit_message(struct membuffer *msg)
+static void create_commit_message(struct membuffer *msg, bool create_empty)
 {
 	int nr = dive_table.nr;
 	struct dive *dive = get_dive(nr-1);
 
-	if (dive) {
+	if (create_empty) {
+		put_string(msg, "Initial commit to create empty repo.\n\n");
+	} else if (dive) {
 		dive_trip_t *trip = dive->divetrip;
 		const char *location = get_dive_location(dive) ? : "no location";
 		struct divecomputer *dc = &dive->dc;
@@ -1066,21 +1086,23 @@ static void create_commit_message(struct membuffer *msg)
 			nr = dive->number;
 
 		put_format(msg, "dive %d: %s", nr, location);
-		if (trip && trip->location && *trip->location && strcmp(trip->location, location))
+		if (trip && !empty_string(trip->location) && strcmp(trip->location, location))
 			put_format(msg, " (%s)", trip->location);
 		put_format(msg, "\n");
 		do {
-			if (dc->model && *dc->model) {
+			if (!empty_string(dc->model)) {
 				put_format(msg, "%s%s", sep, dc->model);
 				sep = ", ";
 			}
 		} while ((dc = dc->next) != NULL);
 		put_format(msg, "\n");
 	}
-	put_format(msg, "Created by subsurface %s\n", subsurface_user_agent());
+	const char *user_agent = subsurface_user_agent();
+	put_format(msg, "Created by %s\n", user_agent);
+	free((void *)user_agent);
 }
 
-static int create_new_commit(git_repository *repo, const char *remote, const char *branch, git_oid *tree_id)
+static int create_new_commit(git_repository *repo, const char *remote, const char *branch, git_oid *tree_id, bool create_empty)
 {
 	int ret;
 	git_reference *ref;
@@ -1105,7 +1127,7 @@ static int create_new_commit(git_repository *repo, const char *remote, const cha
 			return report_error("Unable to look up parent in branch '%s'", branch);
 
 		if (saved_git_id) {
-			if (existing_filename)
+			if (existing_filename && verbose)
 				fprintf(stderr, "existing filename %s\n", existing_filename);
 			const git_oid *id = git_commit_id((const git_commit *) parent);
 			/* if we are saving to the same git tree we got this from, let's make
@@ -1127,21 +1149,29 @@ static int create_new_commit(git_repository *repo, const char *remote, const cha
 	/* If the parent commit has the same tree ID, do not create a new commit */
 	if (parent && git_oid_equal(tree_id, git_commit_tree_id((const git_commit *) parent))) {
 		/* If the parent already came from the ref, the commit is already there */
-		if (ref)
+		if (ref) {
+			git_signature_free(author);
 			return 0;
+		}
 		/* Else we do want to create the new branch, but with the old commit */
 		commit = (git_commit *) parent;
 	} else {
 		struct membuffer commit_msg = { 0 };
 
-		create_commit_message(&commit_msg);
-		if (git_commit_create_v(&commit_id, repo, NULL, author, author, NULL, mb_cstring(&commit_msg), tree, parent != NULL, parent))
+		create_commit_message(&commit_msg, create_empty);
+		if (git_commit_create_v(&commit_id, repo, NULL, author, author, NULL, mb_cstring(&commit_msg), tree, parent != NULL, parent)) {
+			git_signature_free(author);
 			return report_error("Git commit create failed (%s)", strerror(errno));
+		}
 		free_buffer(&commit_msg);
 
-		if (git_commit_lookup(&commit, repo, &commit_id))
+		if (git_commit_lookup(&commit, repo, &commit_id)) {
+			git_signature_free(author);
 			return report_error("Could not look up newly created commit");
+		}
 	}
+
+	git_signature_free(author);
 
 	if (!ref) {
 		if (git_branch_create(&ref, repo, branch, commit, 0))
@@ -1165,9 +1195,14 @@ static int create_new_commit(git_repository *repo, const char *remote, const cha
 
 	if (git_reference_set_target(&ref, ref, &commit_id, "Subsurface save event"))
 		return report_error("Failed to update branch '%s'", branch);
-	set_git_id(&commit_id);
 
-	git_signature_free(author);
+	/*
+	 * if this was the empty commit to initialize a new repo, don't remember the
+	 * commit_id, otherwise we'll think that the cache is valid and fail when building
+	 * the tree when we actually try to store the dive data
+	 */
+	if (! create_empty)
+		set_git_id(&commit_id);
 
 	return 0;
 }
@@ -1206,7 +1241,7 @@ int do_git_save(git_repository *repo, const char *branch, const char *remote, bo
 		fprintf(stderr, "git storage: do git save\n");
 
 	if (!create_empty) // so we are actually saving the dives
-		git_storage_update_progress(false, "start git save");
+		git_storage_update_progress(translate("gettextFromC", "Preparing to save data"));
 
 	/*
 	 * Check if we can do the cached writes - we need to
@@ -1232,15 +1267,12 @@ int do_git_save(git_repository *repo, const char *branch, const char *remote, bo
 		return report_error("git tree write failed");
 
 	/* And save the tree! */
-	if (create_new_commit(repo, remote, branch, &id))
+	if (create_new_commit(repo, remote, branch, &id, create_empty))
 		return report_error("creating commit failed");
 
-	if (remote && prefs.cloud_background_sync && !prefs.git_local_only) {
-		/* now sync the tree with the cloud server */
-		if (strstr(remote, prefs.cloud_git_url)) {
-			return sync_with_remote(repo, remote, branch, RT_HTTPS);
-		}
-	}
+	/* now sync the tree with the remote server */
+	if (remote && !prefs.git_local_only)
+		return sync_with_remote(repo, remote, branch, url_to_remote_transport(remote));
 	return 0;
 }
 

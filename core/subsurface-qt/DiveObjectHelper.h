@@ -1,11 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0
 #ifndef DIVE_QOBJECT_H
 #define DIVE_QOBJECT_H
 
-#include "../dive.h"
 #include "CylinderObjectHelper.h"
 #include <QObject>
 #include <QString>
 #include <QStringList>
+#include <QVariant>
 
 class DiveObjectHelper : public QObject {
 	Q_OBJECT
@@ -18,6 +19,8 @@ class DiveObjectHelper : public QObject {
 	Q_PROPERTY(int timestamp READ timestamp CONSTANT)
 	Q_PROPERTY(QString location READ location CONSTANT)
 	Q_PROPERTY(QString gps READ gps CONSTANT)
+	Q_PROPERTY(QString gps_decimal READ gps_decimal CONSTANT)
+	Q_PROPERTY(QVariant dive_site_uuid READ dive_site_uuid CONSTANT)
 	Q_PROPERTY(QString duration READ duration CONSTANT)
 	Q_PROPERTY(bool noDive READ noDive CONSTANT)
 	Q_PROPERTY(QString depth READ depth CONSTANT)
@@ -38,6 +41,7 @@ class DiveObjectHelper : public QObject {
 	Q_PROPERTY(QList<CylinderObjectHelper*> cylinderObjects READ cylinderObjects CONSTANT)
 	Q_PROPERTY(QString trip READ trip CONSTANT)
 	Q_PROPERTY(QString tripMeta READ tripMeta CONSTANT)
+	Q_PROPERTY(int tripNrDives READ tripNrDives CONSTANT)
 	Q_PROPERTY(int maxcns READ maxcns CONSTANT)
 	Q_PROPERTY(int otu READ otu CONSTANT)
 	Q_PROPERTY(QString sumWeight READ sumWeight CONSTANT)
@@ -45,9 +49,6 @@ class DiveObjectHelper : public QObject {
 	Q_PROPERTY(QString startPressure READ startPressure CONSTANT)
 	Q_PROPERTY(QString endPressure READ endPressure CONSTANT)
 	Q_PROPERTY(QString firstGas READ firstGas CONSTANT)
-	Q_PROPERTY(QStringList suitList READ suitList CONSTANT)
-	Q_PROPERTY(QStringList buddyList READ buddyList CONSTANT)
-	Q_PROPERTY(QStringList divemasterList READ divemasterList CONSTANT)
 public:
 	DiveObjectHelper(struct dive *dive = NULL);
 	~DiveObjectHelper();
@@ -60,6 +61,8 @@ public:
 	QString time() const;
 	QString location() const;
 	QString gps() const;
+	QString gps_decimal() const;
+	QVariant dive_site_uuid() const;
 	QString duration() const;
 	bool noDive() const;
 	QString depth() const;
@@ -82,6 +85,7 @@ public:
 	QList<CylinderObjectHelper*> cylinderObjects() const;
 	QString trip() const;
 	QString tripMeta() const;
+	int tripNrDives() const;
 	int maxcns() const;
 	int otu() const;
 	QString sumWeight() const;
@@ -89,9 +93,6 @@ public:
 	QString startPressure() const;
 	QString endPressure() const;
 	QString firstGas() const;
-	QStringList suitList() const;
-	QStringList buddyList() const;
-	QStringList divemasterList() const;
 
 private:
 	struct dive *m_dive;

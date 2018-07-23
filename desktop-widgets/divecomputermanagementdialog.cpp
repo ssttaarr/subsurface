@@ -1,12 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "desktop-widgets/divecomputermanagementdialog.h"
 #include "desktop-widgets/mainwindow.h"
-#include "core/helpers.h"
+#include "core/qthelper.h"
 #include "qt-models/divecomputermodel.h"
 #include <QMessageBox>
 #include <QShortcut>
 
-DiveComputerManagementDialog::DiveComputerManagementDialog(QWidget *parent, Qt::WindowFlags f) : QDialog(parent, f),
-	model(0)
+DiveComputerManagementDialog::DiveComputerManagementDialog(QWidget *parent, Qt::WindowFlags f) : QDialog(parent, f)
 {
 	ui.setupUi(this);
 	init();
@@ -19,24 +19,17 @@ DiveComputerManagementDialog::DiveComputerManagementDialog(QWidget *parent, Qt::
 
 void DiveComputerManagementDialog::init()
 {
-	delete model;
-	model = new DiveComputerModel(dcList.dcMap);
-	ui.tableView->setModel(model);
+	model.reset(new DiveComputerModel);
+	ui.tableView->setModel(model.data());
+	ui.tableView->resizeColumnsToContents();
+	ui.tableView->setColumnWidth(DiveComputerModel::REMOVE, 22);
+	layout()->activate();
 }
 
 DiveComputerManagementDialog *DiveComputerManagementDialog::instance()
 {
 	static DiveComputerManagementDialog *self = new DiveComputerManagementDialog(MainWindow::instance());
-	self->setAttribute(Qt::WA_QuitOnClose, false);
 	return self;
-}
-
-void DiveComputerManagementDialog::update()
-{
-	model->update();
-	ui.tableView->resizeColumnsToContents();
-	ui.tableView->setColumnWidth(DiveComputerModel::REMOVE, 22);
-	layout()->activate();
 }
 
 void DiveComputerManagementDialog::tryRemove(const QModelIndex &index)
@@ -63,7 +56,6 @@ void DiveComputerManagementDialog::accept()
 
 void DiveComputerManagementDialog::reject()
 {
-	model->dropWorkingList();
 	hide();
 	close();
 }

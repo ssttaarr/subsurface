@@ -1,9 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "desktop-widgets/diveplanner.h"
 #include "desktop-widgets/modeldelegates.h"
 #include "desktop-widgets/mainwindow.h"
 #include "core/planner.h"
-#include "core/helpers.h"
+#include "core/qthelper.h"
 #include "core/subsurface-qt/SettingsObjectWrapper.h"
+#include "core/gettextfromc.h"
 
 #include "qt-models/cylindermodel.h"
 #include "qt-models/models.h"
@@ -23,7 +25,6 @@
 #define UNIT_FACTOR ((prefs.units.length == units::METERS) ? 1000.0 / 60.0 : feet_to_mm(1.0) / 60.0)
 
 static DivePlannerPointsModel* plannerModel = DivePlannerPointsModel::instance();
-static CylindersModel* cylinderModel = CylindersModel::instance();
 
 DiveHandler::DiveHandler() : QGraphicsEllipseItem()
 {
@@ -44,6 +45,7 @@ void DiveHandler::contextMenuEvent(QGraphicsSceneContextMenuEvent *event)
 {
 	QMenu m;
 	// Don't have a gas selection for the last point
+	emit released();
 	QModelIndex index = plannerModel->index(parentIndex(), DivePlannerPointsModel::GAS);
 	if (index.sibling(index.row() + 1, index.column()).isValid()) {
 		GasSelectionModel *model = GasSelectionModel::instance();
@@ -60,7 +62,7 @@ void DiveHandler::contextMenuEvent(QGraphicsSceneContextMenuEvent *event)
 	// don't allow removing the last point
 	if (plannerModel->rowCount() > 1) {
 		m.addSeparator();
-		m.addAction(QObject::tr("Remove this point"), this, SLOT(selfRemove()));
+		m.addAction(gettextFromC::tr("Remove this point"), this, SLOT(selfRemove()));
 		m.exec(event->screenPos());
 	}
 }
@@ -76,7 +78,7 @@ void DiveHandler::changeGas()
 {
 	QAction *action = qobject_cast<QAction *>(sender());
 	QModelIndex index = plannerModel->index(parentIndex(), DivePlannerPointsModel::GAS);
-	plannerModel->gaschange(index.sibling(index.row() + 1, index.column()), action->data().toInt());
+	plannerModel->gasChange(index.sibling(index.row() + 1, index.column()), action->data().toInt());
 }
 
 void DiveHandler::mouseMoveEvent(QGraphicsSceneMouseEvent *event)
@@ -113,8 +115,14 @@ DivePlannerWidget::DivePlannerWidget(QWidget *parent, Qt::WindowFlags f) : QWidg
 	ui.tableWidget->setModel(plannerModel);
 	plannerModel->setRecalc(true);
 	ui.tableWidget->view()->setItemDelegateForColumn(DivePlannerPointsModel::GAS, new AirTypesDelegate(this));
+	ui.tableWidget->view()->setItemDelegateForColumn(DivePlannerPointsModel::DIVEMODE, new DiveTypesDelegate(this));
 	ui.cylinderTableWidget->setTitle(tr("Available gases"));
+	ui.cylinderTableWidget->setBtnToolTip(tr("Add cylinder"));
 	ui.cylinderTableWidget->setModel(CylindersModel::instance());
+	ui.waterType->setItemData(0, FRESHWATER_SALINITY);
+	ui.waterType->setItemData(1, SEAWATER_SALINITY);
+	ui.waterType->setItemData(2, EN13319_SALINITY);
+	waterTypeUpdateTexts();
 	QTableView *view = ui.cylinderTableWidget->view();
 	view->setColumnHidden(CylindersModel::START, true);
 	view->setColumnHidden(CylindersModel::END, true);
@@ -145,7 +153,8 @@ DivePlannerWidget::DivePlannerWidget(QWidget *parent, Qt::WindowFlags f) : QWidg
 	connect(ui.dateEdit, SIGNAL(dateChanged(QDate)), plannerModel, SLOT(setStartDate(QDate)));
 	connect(ui.ATMPressure, SIGNAL(valueChanged(int)), this, SLOT(atmPressureChanged(int)));
 	connect(ui.atmHeight, SIGNAL(valueChanged(int)), this, SLOT(heightChanged(int)));
-	connect(ui.salinity, SIGNAL(valueChanged(double)), this, SLOT(salinityChanged(double)));
+	connect(ui.waterType, SIGNAL(currentIndexChanged(int)), this, SLOT(waterTypeChanged(int)));
+	connect(ui.customSalinity, SIGNAL(valueChanged(double)), this, SLOT(customSalinityChanged(double)));
 	connect(plannerModel, SIGNAL(startTimeChanged(QDateTime)), this, SLOT(setupStartTime(QDateTime)));
 
 	// Creating (and canceling) the plan
@@ -186,9 +195,30 @@ void DivePlannerWidget::setSurfacePressure(int surface_pressure)
 	ui.ATMPressure->setValue(surface_pressure);
 }
 
+void PlannerSettingsWidget::setDiveMode(int mode)
+{
+	ui.rebreathermode->setCurrentIndex(mode);
+}
+
 void DivePlannerWidget::setSalinity(int salinity)
 {
-	ui.salinity->setValue(salinity / 10000.0);
+	bool mapped = false;
+	for (int i = 0; i < ui.waterType->count(); i++) {
+		if (salinity == ui.waterType->itemData(i).toInt()) {
+			mapped = true;
+			ui.waterType->setCurrentIndex(i);
+			break;
+		}
+	}
+	
+	if (!mapped) {
+		/* Assign to last element "custom" in combo box */
+		ui.waterType->setItemData(ui.waterType->count()-1, salinity);
+		ui.waterType->setCurrentIndex(ui.waterType->count()-1);
+		ui.customSalinity->setEnabled(true);
+		ui.customSalinity->setValue(salinity / 10000.0);
+	}
+	plannerModel->setSalinity(salinity);
 }
 
 void DivePlannerWidget::settingsChanged()
@@ -196,8 +226,12 @@ void DivePlannerWidget::settingsChanged()
 	// Adopt units
 	if (get_units()->length == units::FEET) {
 		ui.atmHeight->setSuffix("ft");
+		ui.atmHeight->setMinimum(-300);
+		ui.atmHeight->setMaximum(10000);
 	} else {
 		ui.atmHeight->setSuffix(("m"));
+		ui.atmHeight->setMinimum(-100);
+		ui.atmHeight->setMaximum(3000);
 	}
 	ui.atmHeight->blockSignals(true);
 	ui.atmHeight->setValue((int) get_depth_units((int) (log(1013.0 / plannerModel->getSurfacePressure()) * 7800000), NULL,NULL));
@@ -214,17 +248,41 @@ void DivePlannerWidget::atmPressureChanged(const int pressure)
 
 void DivePlannerWidget::heightChanged(const int height)
 {
-	int pressure = (int) (1013.0 * exp(- (double) units_to_depth((double) height) / 7800000.0));
+	int pressure = (int) (1013.0 * exp(- (double) units_to_depth((double) height).mm / 7800000.0));
 	ui.ATMPressure->blockSignals(true);
 	ui.ATMPressure->setValue(pressure);
 	ui.ATMPressure->blockSignals(false);
 	plannerModel->setSurfacePressure(pressure);
 }
 
-void DivePlannerWidget::salinityChanged(const double salinity)
+void DivePlannerWidget::waterTypeUpdateTexts()
 {
-	/* Salinity is expressed in weight in grams per 10l */
-	plannerModel->setSalinity(10000 * salinity);
+	double density;
+	/* Do not set text in last/custom element */
+	for (int i = 0; i < ui.waterType->count()-1; i++) {
+		if (ui.waterType->itemData(i) != QVariant::Invalid) {
+			QString densityText = ui.waterType->itemText(i).split("(")[0].trimmed();
+			density = ui.waterType->itemData(i).toInt() / 10000.0;
+			densityText.append(QString(" (%L1%2)").arg(density, 0, 'f', 2).arg(tr("kg/ℓ")));
+			ui.waterType->setItemText(i, densityText);
+		}
+	}
+}
+
+void DivePlannerWidget::waterTypeChanged(const int index)
+{
+	ui.customSalinity->setEnabled(index == ui.waterType->count() - 1);
+	ui.customSalinity->setValue(ui.waterType->itemData(index).toInt() / 10000.0);
+	plannerModel->setSalinity(ui.waterType->itemData(index).toInt());
+}
+
+void DivePlannerWidget::customSalinityChanged(double density)
+{
+	if (ui.customSalinity->isEnabled()) {
+		int newSalinity = (int)(density * 10000.0);
+		ui.waterType->setItemData(ui.waterType->count() - 1, newSalinity);
+		plannerModel->setSalinity(newSalinity);
+	}
 }
 
 void PlannerSettingsWidget::bottomSacChanged(const double bottomSac)
@@ -240,40 +298,118 @@ void PlannerSettingsWidget::decoSacChanged(const double decosac)
 void PlannerSettingsWidget::disableDecoElements(int mode)
 {
 	if (mode == RECREATIONAL) {
+		ui.label_gflow->setDisabled(false);
+		ui.label_gfhigh->setDisabled(false);
 		ui.gflow->setDisabled(false);
 		ui.gfhigh->setDisabled(false);
 		ui.lastStop->setDisabled(true);
 		ui.backgasBreaks->setDisabled(true);
-		ui.bottompo2->setDisabled(true);
+		ui.backgasBreaks->blockSignals(true);
+		ui.backgasBreaks->setChecked(false);
+		ui.backgasBreaks->blockSignals(false);
+		ui.bottompo2->setDisabled(false);
 		ui.decopo2->setDisabled(true);
+		ui.safetystop->setDisabled(false);
+		ui.label_reserve_gas->setDisabled(false);
 		ui.reserve_gas->setDisabled(false);
+		ui.label_vpmb_conservatism->setDisabled(true);
 		ui.vpmb_conservatism->setDisabled(true);
 		ui.switch_at_req_stop->setDisabled(true);
 		ui.min_switch_duration->setDisabled(true);
+		ui.label_min_switch_duration->setDisabled(true);
+		ui.sacfactor->setDisabled(true);
+		ui.problemsolvingtime->setDisabled(true);
+		ui.sacfactor->blockSignals(true);
+		ui.problemsolvingtime->blockSignals(true);
+		ui.sacfactor->setValue(2.0);
+		ui.problemsolvingtime->setValue(0);
+		ui.sacfactor->blockSignals(false);
+		ui.problemsolvingtime->blockSignals(false);
+		ui.display_variations->setDisabled(true);
 	}
 	else if (mode == VPMB) {
+		ui.label_gflow->setDisabled(true);
+		ui.label_gfhigh->setDisabled(true);
 		ui.gflow->setDisabled(true);
 		ui.gfhigh->setDisabled(true);
 		ui.lastStop->setDisabled(false);
-		ui.backgasBreaks->setDisabled(false);
+		if (prefs.last_stop) {
+			ui.backgasBreaks->setDisabled(false);
+			ui.backgasBreaks->blockSignals(true);
+			ui.backgasBreaks->setChecked(prefs.doo2breaks);
+			ui.backgasBreaks->blockSignals(false);
+		} else {
+			ui.backgasBreaks->setDisabled(true);
+			ui.backgasBreaks->blockSignals(true);
+			ui.backgasBreaks->setChecked(false);
+			ui.backgasBreaks->blockSignals(false);
+		}
 		ui.bottompo2->setDisabled(false);
 		ui.decopo2->setDisabled(false);
+		ui.safetystop->setDisabled(true);
+		ui.label_reserve_gas->setDisabled(true);
 		ui.reserve_gas->setDisabled(true);
+		ui.label_vpmb_conservatism->setDisabled(false);
 		ui.vpmb_conservatism->setDisabled(false);
 		ui.switch_at_req_stop->setDisabled(false);
 		ui.min_switch_duration->setDisabled(false);
+		ui.label_min_switch_duration->setDisabled(false);
+		ui.sacfactor->setDisabled(false);
+		ui.problemsolvingtime->setDisabled(false);
+		ui.sacfactor->setValue(prefs.sacfactor / 100.0);
+		ui.problemsolvingtime->setValue(prefs.problemsolvingtime);
+		ui.display_variations->setDisabled(false);
 	}
 	else if (mode == BUEHLMANN) {
+		ui.label_gflow->setDisabled(false);
+		ui.label_gfhigh->setDisabled(false);
 		ui.gflow->setDisabled(false);
 		ui.gfhigh->setDisabled(false);
 		ui.lastStop->setDisabled(false);
-		ui.backgasBreaks->setDisabled(false);
+		if (prefs.last_stop) {
+			ui.backgasBreaks->setDisabled(false);
+			ui.backgasBreaks->blockSignals(true);
+			ui.backgasBreaks->setChecked(prefs.doo2breaks);
+			ui.backgasBreaks->blockSignals(false);
+		} else {
+			ui.backgasBreaks->setDisabled(true);
+			ui.backgasBreaks->blockSignals(true);
+			ui.backgasBreaks->setChecked(false);
+			ui.backgasBreaks->blockSignals(false);
+		}
 		ui.bottompo2->setDisabled(false);
 		ui.decopo2->setDisabled(false);
+		ui.safetystop->setDisabled(true);
+		ui.label_reserve_gas->setDisabled(true);
 		ui.reserve_gas->setDisabled(true);
+		ui.label_vpmb_conservatism->setDisabled(true);
 		ui.vpmb_conservatism->setDisabled(true);
 		ui.switch_at_req_stop->setDisabled(false);
 		ui.min_switch_duration->setDisabled(false);
+		ui.label_min_switch_duration->setDisabled(false);
+		ui.sacfactor->setDisabled(false);
+		ui.problemsolvingtime->setDisabled(false);
+		ui.sacfactor->setValue(prefs.sacfactor / 100.0);
+		ui.problemsolvingtime->setValue(prefs.problemsolvingtime);
+		ui.display_variations->setDisabled(false);
+	}
+}
+
+void PlannerSettingsWidget::disableBackgasBreaks(bool enabled)
+{
+	if (prefs.planner_deco_mode == RECREATIONAL)
+		return;
+
+	if (enabled) {
+		ui.backgasBreaks->setDisabled(false);
+		ui.backgasBreaks->blockSignals(true);
+		ui.backgasBreaks->setChecked(prefs.doo2breaks);
+		ui.backgasBreaks->blockSignals(false);
+	} else {
+		ui.backgasBreaks->setDisabled(true);
+		ui.backgasBreaks->blockSignals(true);
+		ui.backgasBreaks->setChecked(false);
+		ui.backgasBreaks->blockSignals(false);
 	}
 }
 
@@ -285,7 +421,6 @@ void DivePlannerWidget::printDecoPlan()
 PlannerSettingsWidget::PlannerSettingsWidget(QWidget *parent, Qt::WindowFlags f) : QWidget(parent, f)
 {
 	ui.setupUi(this);
-	QStringList rebreather_modes;
 
 	plannerModel->getDiveplan().bottomsac = prefs.bottomsac;
 	plannerModel->getDiveplan().decosac = prefs.decosac;
@@ -296,7 +431,10 @@ PlannerSettingsWidget::PlannerSettingsWidget(QWidget *parent, Qt::WindowFlags f)
 	ui.display_duration->setChecked(prefs.display_duration);
 	ui.display_runtime->setChecked(prefs.display_runtime);
 	ui.display_transitions->setChecked(prefs.display_transitions);
+	ui.display_variations->setChecked(prefs.display_variations);
 	ui.safetystop->setChecked(prefs.safetystop);
+	ui.sacfactor->setValue(prefs.sacfactor / 100.0);
+	ui.problemsolvingtime->setValue(prefs.problemsolvingtime);
 	ui.bottompo2->setValue(prefs.bottompo2 / 1000.0);
 	ui.decopo2->setValue(prefs.decopo2 / 1000.0);
 	ui.backgasBreaks->setChecked(prefs.doo2breaks);
@@ -309,7 +447,9 @@ PlannerSettingsWidget::PlannerSettingsWidget(QWidget *parent, Qt::WindowFlags f)
 	disableDecoElements((int) prefs.planner_deco_mode);
 
 	// should be the same order as in dive_comp_type!
-	rebreather_modes << tr("Open circuit") << tr("CCR") << tr("pSCR");
+	QStringList rebreather_modes = QStringList();
+	for (int i = 0; i < FREEDIVE; i++)
+		rebreather_modes.append(gettextFromC::tr(divemode_text_ui[i]));
 	ui.rebreathermode->insertItems(0, rebreather_modes);
 
 	modeMapper = new QSignalMapper(this);
@@ -323,42 +463,39 @@ PlannerSettingsWidget::PlannerSettingsWidget(QWidget *parent, Qt::WindowFlags f)
 	connect(ui.vpmb_deco, SIGNAL(clicked()), modeMapper, SLOT(map()));
 
 	connect(ui.lastStop, SIGNAL(toggled(bool)), plannerModel, SLOT(setLastStop6m(bool)));
+	connect(ui.lastStop, SIGNAL(toggled(bool)), this, SLOT(disableBackgasBreaks(bool)));
 	connect(ui.verbatim_plan, SIGNAL(toggled(bool)), plannerModel, SLOT(setVerbatim(bool)));
 	connect(ui.display_duration, SIGNAL(toggled(bool)), plannerModel, SLOT(setDisplayDuration(bool)));
 	connect(ui.display_runtime, SIGNAL(toggled(bool)), plannerModel, SLOT(setDisplayRuntime(bool)));
 	connect(ui.display_transitions, SIGNAL(toggled(bool)), plannerModel, SLOT(setDisplayTransitions(bool)));
+	connect(ui.display_variations, SIGNAL(toggled(bool)), plannerModel, SLOT(setDisplayVariations(bool)));
 	connect(ui.safetystop, SIGNAL(toggled(bool)), plannerModel, SLOT(setSafetyStop(bool)));
 	connect(ui.reserve_gas, SIGNAL(valueChanged(int)), plannerModel, SLOT(setReserveGas(int)));
-	connect(ui.ascRate75, SIGNAL(valueChanged(int)), plannerModel, SLOT(emitDataChanged()));
-	connect(ui.ascRate50, SIGNAL(valueChanged(int)), plannerModel, SLOT(emitDataChanged()));
-	connect(ui.ascRateStops, SIGNAL(valueChanged(int)), plannerModel, SLOT(emitDataChanged()));
-	connect(ui.ascRateLast6m, SIGNAL(valueChanged(int)), plannerModel, SLOT(emitDataChanged()));
-	connect(ui.descRate, SIGNAL(valueChanged(int)), plannerModel, SLOT(emitDataChanged()));
-	connect(ui.ascRate75, SIGNAL(editingFinished()), plannerModel, SLOT(emitDataChanged()));
-	connect(ui.ascRate50, SIGNAL(editingFinished()), plannerModel, SLOT(emitDataChanged()));
-	connect(ui.ascRateStops, SIGNAL(editingFinished()), plannerModel, SLOT(emitDataChanged()));
-	connect(ui.ascRateLast6m, SIGNAL(editingFinished()), plannerModel, SLOT(emitDataChanged()));
-	connect(ui.descRate, SIGNAL(editingFinished()), plannerModel, SLOT(emitDataChanged()));
+	connect(ui.ascRate75, SIGNAL(valueChanged(int)), plannerModel, SLOT(setAscrate75(int)));
+	connect(ui.ascRate50, SIGNAL(valueChanged(int)), plannerModel, SLOT(setAscrate50(int)));
+	connect(ui.ascRateStops, SIGNAL(valueChanged(int)), plannerModel, SLOT(setAscratestops(int)));
+	connect(ui.ascRateLast6m, SIGNAL(valueChanged(int)), plannerModel, SLOT(setAscratelast6m(int)));
+	connect(ui.descRate, SIGNAL(valueChanged(int)), plannerModel, SLOT(setDescrate(int)));
 	connect(ui.drop_stone_mode, SIGNAL(toggled(bool)), plannerModel, SLOT(setDropStoneMode(bool)));
 	connect(ui.gfhigh, SIGNAL(valueChanged(int)), plannerModel, SLOT(setGFHigh(int)));
 	connect(ui.gflow, SIGNAL(valueChanged(int)), plannerModel, SLOT(setGFLow(int)));
-	connect(ui.gfhigh, SIGNAL(editingFinished()), plannerModel, SLOT(triggerGFHigh()));
-	connect(ui.gflow, SIGNAL(editingFinished()), plannerModel, SLOT(triggerGFLow()));
 	connect(ui.vpmb_conservatism, SIGNAL(valueChanged(int)), plannerModel, SLOT(setVpmbConservatism(int)));
 	connect(ui.backgasBreaks, SIGNAL(toggled(bool)), this, SLOT(setBackgasBreaks(bool)));
 	connect(ui.switch_at_req_stop, SIGNAL(toggled(bool)), plannerModel, SLOT(setSwitchAtReqStop(bool)));
 	connect(ui.min_switch_duration, SIGNAL(valueChanged(int)), plannerModel, SLOT(setMinSwitchDuration(int)));
 	connect(ui.rebreathermode, SIGNAL(currentIndexChanged(int)), plannerModel, SLOT(setRebreatherMode(int)));
 
-	connect(ui.bottompo2, SIGNAL(valueChanged(double)), cylinderModel, SLOT(updateBestMixes()));
-	connect(ui.bestmixEND, SIGNAL(valueChanged(int)), cylinderModel, SLOT(updateBestMixes()));
+	connect(ui.bottompo2, SIGNAL(valueChanged(double)), CylindersModel::instance(), SLOT(updateBestMixes()));
+	connect(ui.bestmixEND, SIGNAL(valueChanged(int)), CylindersModel::instance(), SLOT(updateBestMixes()));
 
 	connect(modeMapper, SIGNAL(mapped(int)), this, SLOT(disableDecoElements(int)));
-	connect(ui.ascRate75, SIGNAL(valueChanged(int)), this, SLOT(setAscRate75(int)));
-	connect(ui.ascRate50, SIGNAL(valueChanged(int)), this, SLOT(setAscRate50(int)));
-	connect(ui.descRate, SIGNAL(valueChanged(int)), this, SLOT(setDescRate(int)));
-	connect(ui.ascRateStops, SIGNAL(valueChanged(int)), this, SLOT(setAscRateStops(int)));
-	connect(ui.ascRateLast6m, SIGNAL(valueChanged(int)), this, SLOT(setAscRateLast6m(int)));
+	connect(ui.ascRate75, SIGNAL(valueChanged(int)), this, SLOT(setAscrate75(int)));
+	connect(ui.ascRate50, SIGNAL(valueChanged(int)), this, SLOT(setAscrate50(int)));
+	connect(ui.descRate, SIGNAL(valueChanged(int)), this, SLOT(setDescrate(int)));
+	connect(ui.ascRateStops, SIGNAL(valueChanged(int)), this, SLOT(setAscratestops(int)));
+	connect(ui.ascRateLast6m, SIGNAL(valueChanged(int)), this, SLOT(setAscratelast6m(int)));
+	connect(ui.sacfactor, SIGNAL(valueChanged(double)), this, SLOT(sacFactorChanged(double)));
+	connect(ui.problemsolvingtime, SIGNAL(valueChanged(int)), this, SLOT(problemSolvingTimeChanged(int)));
 	connect(ui.bottompo2, SIGNAL(valueChanged(double)), this, SLOT(setBottomPo2(double)));
 	connect(ui.decopo2, SIGNAL(valueChanged(double)), this, SLOT(setDecoPo2(double)));
 	connect(ui.bestmixEND, SIGNAL(valueChanged(int)), this, SLOT(setBestmixEND(int)));
@@ -370,18 +507,26 @@ PlannerSettingsWidget::PlannerSettingsWidget(QWidget *parent, Qt::WindowFlags f)
 	ui.gfhigh->setValue(prefs.gfhigh);
 	ui.vpmb_conservatism->setValue(prefs.vpmb_conservatism);
 
+	ui.ascRate75->setKeyboardTracking(false);
+	ui.ascRate50->setKeyboardTracking(false);
+	ui.ascRateLast6m->setKeyboardTracking(false);
+	ui.ascRateStops->setKeyboardTracking(false);
+	ui.descRate->setKeyboardTracking(false);
+	ui.gfhigh->setKeyboardTracking(false);
+	ui.gflow->setKeyboardTracking(false);
+
 	setMinimumWidth(0);
 	setMinimumHeight(0);
 }
 
 void PlannerSettingsWidget::updateUnitsUI()
 {
-	ui.ascRate75->setValue(rint(prefs.ascrate75 / UNIT_FACTOR));
-	ui.ascRate50->setValue(rint(prefs.ascrate50 / UNIT_FACTOR));
-	ui.ascRateStops->setValue(rint(prefs.ascratestops / UNIT_FACTOR));
-	ui.ascRateLast6m->setValue(rint(prefs.ascratelast6m / UNIT_FACTOR));
-	ui.descRate->setValue(rint(prefs.descrate / UNIT_FACTOR));
-	ui.bestmixEND->setValue(rint(get_depth_units(prefs.bestmixend.mm, NULL, NULL)));
+	ui.ascRate75->setValue(lrint(prefs.ascrate75 / UNIT_FACTOR));
+	ui.ascRate50->setValue(lrint(prefs.ascrate50 / UNIT_FACTOR));
+	ui.ascRateStops->setValue(lrint(prefs.ascratestops / UNIT_FACTOR));
+	ui.ascRateLast6m->setValue(lrint(prefs.ascratelast6m / UNIT_FACTOR));
+	ui.descRate->setValue(lrint(prefs.descrate / UNIT_FACTOR));
+	ui.bestmixEND->setValue(lrint(get_depth_units(prefs.bestmixend.mm, NULL, NULL)));
 }
 
 PlannerSettingsWidget::~PlannerSettingsWidget()
@@ -452,29 +597,39 @@ void PlannerSettingsWidget::printDecoPlan()
 {
 }
 
-void PlannerSettingsWidget::setAscRate75(int rate)
+void PlannerSettingsWidget::setAscrate75(int rate)
 {
-	SettingsObjectWrapper::instance()->planner_settings->setAscrate75(rate * UNIT_FACTOR);
+	SettingsObjectWrapper::instance()->planner_settings->setAscrate75(lrint(rate * UNIT_FACTOR));
 }
 
-void PlannerSettingsWidget::setAscRate50(int rate)
+void PlannerSettingsWidget::setAscrate50(int rate)
 {
-	SettingsObjectWrapper::instance()->planner_settings->setAscrate50(rate * UNIT_FACTOR);
+	SettingsObjectWrapper::instance()->planner_settings->setAscrate50(lrint(rate * UNIT_FACTOR));
 }
 
-void PlannerSettingsWidget::setAscRateStops(int rate)
+void PlannerSettingsWidget::setAscratestops(int rate)
 {
-	SettingsObjectWrapper::instance()->planner_settings->setAscratestops(rate * UNIT_FACTOR);
+	SettingsObjectWrapper::instance()->planner_settings->setAscratestops(lrint(rate * UNIT_FACTOR));
 }
 
-void PlannerSettingsWidget::setAscRateLast6m(int rate)
+void PlannerSettingsWidget::setAscratelast6m(int rate)
 {
-	SettingsObjectWrapper::instance()->planner_settings->setAscratelast6m(rate * UNIT_FACTOR);
+	SettingsObjectWrapper::instance()->planner_settings->setAscratelast6m(lrint(rate * UNIT_FACTOR));
 }
 
-void PlannerSettingsWidget::setDescRate(int rate)
+void PlannerSettingsWidget::setDescrate(int rate)
 {
-	SettingsObjectWrapper::instance()->planner_settings->setDescrate(rate * UNIT_FACTOR);
+	SettingsObjectWrapper::instance()->planner_settings->setDescrate(lrint(rate * UNIT_FACTOR));
+}
+
+void PlannerSettingsWidget::sacFactorChanged(const double factor)
+{
+	plannerModel->setSacFactor(factor);
+}
+
+void PlannerSettingsWidget::problemSolvingTimeChanged(const int minutes)
+{
+	plannerModel->setProblemSolvingTime(minutes);
 }
 
 void PlannerSettingsWidget::setBottomPo2(double po2)
@@ -492,7 +647,7 @@ void PlannerSettingsWidget::setDecoPo2(double po2)
 
 void PlannerSettingsWidget::setBestmixEND(int depth)
 {
-	SettingsObjectWrapper::instance()->planner_settings->setBestmixend(units_to_depth(depth));
+	SettingsObjectWrapper::instance()->planner_settings->setBestmixend(units_to_depth(depth).mm);
 }
 
 void PlannerSettingsWidget::setBackgasBreaks(bool dobreaks)

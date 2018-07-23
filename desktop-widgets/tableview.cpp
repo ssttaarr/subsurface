@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "desktop-widgets/tableview.h"
 #include "desktop-widgets/modeldelegates.h"
 
@@ -42,7 +43,7 @@ TableView::TableView(QWidget *parent) : QGroupBox(parent)
 	}
 	layout()->setContentsMargins(margins);
 
-	QIcon plusIcon(":plus");
+	QIcon plusIcon(":list-add-icon");
 	plusBtn = new QPushButton(plusIcon, QString(), this);
 	plusBtn->setFlat(true);
 
@@ -67,13 +68,13 @@ TableView::~TableView()
 	s.beginGroup(objectName());
 	// remove the old default
 	bool oldDefault = (ui.tableView->columnWidth(0) == 30);
-	for (int i = 1; oldDefault && i < ui.tableView->model()->columnCount(); i++) {
+	for (int i = 1; oldDefault && ui.tableView->model() && i < ui.tableView->model()->columnCount(); i++) {
 		if (ui.tableView->columnWidth(i) != 80)
 			oldDefault = false;
 	}
 	if (oldDefault) {
 		s.remove("");
-	} else {
+	} else if (ui.tableView->model()) {
 		for (int i = 0; i < ui.tableView->model()->columnCount(); i++) {
 			if (ui.tableView->columnWidth(i) == defaultColumnWidth(i))
 				s.remove(QString("colwidth%1").arg(i));

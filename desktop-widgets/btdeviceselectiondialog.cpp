@@ -1,7 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <QShortcut>
 #include <QDebug>
 #include <QMessageBox>
 #include <QMenu>
+#include "core/btdiscovery.h"
+
+#include <QBluetoothUuid>
 
 #include "ui_btdeviceselectiondialog.h"
 #include "btdeviceselectiondialog.h"
@@ -36,14 +40,15 @@ BtDeviceSelectionDialog::BtDeviceSelectionDialog(QWidget *parent) :
 	ui->scan->setText(tr("Scan"));
 	ui->clear->setText(tr("Clear"));
 	ui->save->setText(tr("Save"));
+	ui->save->setDefault(true);
 	ui->quit->setText(tr("Quit"));
 
 	// Disable the save button because there is no device selected
 	ui->save->setEnabled(false);
 
 	// Add event for item selection
-	connect(ui->discoveredDevicesList, SIGNAL(itemClicked(QListWidgetItem*)),
-		this, SLOT(itemClicked(QListWidgetItem*)));
+	connect(ui->discoveredDevicesList, SIGNAL(currentItemChanged(QListWidgetItem*,QListWidgetItem*)),
+		this, SLOT(currentItemChanged(QListWidgetItem*,QListWidgetItem*)));
 
 #if defined(Q_OS_WIN)
 	ULONG       ulRetCode = SUCCESS;
@@ -147,8 +152,10 @@ void BtDeviceSelectionDialog::on_save_clicked()
 	QBluetoothDeviceInfo remoteDeviceInfo = currentItem->data(Qt::UserRole).value<QBluetoothDeviceInfo>();
 
 	// Save the selected device
-	selectedRemoteDeviceInfo = QSharedPointer<QBluetoothDeviceInfo>(new QBluetoothDeviceInfo(remoteDeviceInfo));
-
+	selectedRemoteDeviceInfo.reset(new QBluetoothDeviceInfo(remoteDeviceInfo));
+	QString address = remoteDeviceInfo.address().isNull() ? remoteDeviceInfo.deviceUuid().toString() :
+								remoteDeviceInfo.address().toString();
+	saveBtDeviceInfo(address, remoteDeviceInfo);
 	if (remoteDeviceDiscoveryAgent->isActive()) {
 		// Stop the SDP agent if the clear button is pressed and enable the Scan button
 		remoteDeviceDiscoveryAgent->stop();
@@ -166,7 +173,6 @@ void BtDeviceSelectionDialog::on_clear_clicked()
 {
 	ui->dialogStatus->setText(tr("Remote devices list was cleared."));
 	ui->discoveredDevicesList->clear();
-	ui->save->setEnabled(false);
 
 	if (remoteDeviceDiscoveryAgent->isActive()) {
 		// Stop the SDP agent if the clear button is pressed and enable the Scan button
@@ -188,11 +194,12 @@ void BtDeviceSelectionDialog::on_scan_clicked()
 
 void BtDeviceSelectionDialog::remoteDeviceScanFinished()
 {
-	if (remoteDeviceDiscoveryAgent->error() == QBluetoothDeviceDiscoveryAgent::NoError) {
+	// This check is not necessary for Qt's QBluetoothDeviceDiscoveryAgent,
+	// but with the home-brew WinBluetoothDeviceDiscoveryAgent, on error we
+	// get an error() and an finished() signal. Thus, don't overwrite the
+	// error message with a success message.
+	if (remoteDeviceDiscoveryAgent->error() == QBluetoothDeviceDiscoveryAgent::NoError)
 		ui->dialogStatus->setText(tr("Scanning finished successfully."));
-	} else {
-		deviceDiscoveryError(remoteDeviceDiscoveryAgent->error());
-	}
 
 	ui->scan->setEnabled(true);
 }
@@ -221,7 +228,7 @@ void BtDeviceSelectionDialog::addRemoteDevice(const QBluetoothDeviceInfo &remote
 	QColor pairingColor = QColor(Qt::white);
 #else
 	// By default we use the status label and the color for the UNPAIRED state
-	QColor pairingColor = QColor(Qt::red);
+	QColor pairingColor = QColor("#F1A9A0");
 	QString pairingStatusLabel = tr("UNPAIRED");
 	QBluetoothLocalDevice::Pairing pairingStatus = localDevice->pairingStatus(remoteDeviceInfo.address());
 
@@ -230,10 +237,21 @@ void BtDeviceSelectionDialog::addRemoteDevice(const QBluetoothDeviceInfo &remote
 		pairingColor = QColor(Qt::gray);
 	} else if (pairingStatus == QBluetoothLocalDevice::AuthorizedPaired) {
 		pairingStatusLabel = tr("AUTHORIZED_PAIRED");
-		pairingColor = QColor(Qt::blue);
+		pairingColor = QColor("#89C4F4");
 	}
+	if (remoteDeviceInfo.address().isNull())
+		pairingColor = QColor(Qt::gray);
 
-	QString deviceLabel = tr("%1 (%2)   [State: %3]").arg(remoteDeviceInfo.name(),
+	QString deviceLabel;
+
+#if defined(Q_OS_MACOS) || defined(Q_OS_IOS)
+	if (!remoteDeviceInfo.deviceUuid().isNull()) {
+		// we have only a Uuid, no address, so show that and reset the pairing color
+		deviceLabel = QString("%1 (%2)").arg(remoteDeviceInfo.name(),remoteDeviceInfo.deviceUuid().toString());
+		pairingColor = QColor(Qt::white);
+	} else
+#endif
+	deviceLabel = tr("%1 (%2)   [State: %3]").arg(remoteDeviceInfo.name(),
 							      remoteDeviceInfo.address().toString(),
 							      pairingStatusLabel);
 #endif
@@ -246,21 +264,36 @@ void BtDeviceSelectionDialog::addRemoteDevice(const QBluetoothDeviceInfo &remote
 	ui->discoveredDevicesList->addItem(item);
 }
 
-void BtDeviceSelectionDialog::itemClicked(QListWidgetItem *item)
+void BtDeviceSelectionDialog::currentItemChanged(QListWidgetItem *item, QListWidgetItem *)
 {
+	// If the list is cleared, we get a signal with a null item pointer
+	if (!item) {
+		ui->save->setEnabled(false);
+		return;
+	}
+
 	// By default we assume that the devices are paired
 	QBluetoothDeviceInfo remoteDeviceInfo = item->data(Qt::UserRole).value<QBluetoothDeviceInfo>();
 	QString statusMessage = tr("The device %1 can be used for connection. You can press the Save button.")
-				  .arg(remoteDeviceInfo.address().toString());
+				  .arg(remoteDeviceInfo.address().isNull() ?
+					       remoteDeviceInfo.deviceUuid().toString() :
+					       remoteDeviceInfo.address().toString());
 	bool enableSaveButton = true;
 
 #if !defined(Q_OS_WIN)
 	// On other platforms than Windows we can obtain the pairing status so if the devices are not paired we disable the button
-	QBluetoothLocalDevice::Pairing pairingStatus = localDevice->pairingStatus(remoteDeviceInfo.address());
+	// except on MacOS for those devices that only give us a Uuid and not and address (as we have no pairing status for those, either)
+	if (!remoteDeviceInfo.address().isNull()) {
+		QBluetoothLocalDevice::Pairing pairingStatus = localDevice->pairingStatus(remoteDeviceInfo.address());
 
-	if (pairingStatus == QBluetoothLocalDevice::Unpaired) {
-		statusMessage = tr("The device %1 must be paired in order to be used. Please use the context menu for pairing options.")
-				  .arg(remoteDeviceInfo.address().toString());
+		if (pairingStatus == QBluetoothLocalDevice::Unpaired) {
+			statusMessage = tr("The device %1 must be paired in order to be used. Please use the context menu for pairing options.")
+					.arg(remoteDeviceInfo.address().toString());
+			enableSaveButton = false;
+		}
+	}
+	if (remoteDeviceInfo.address().isNull() && remoteDeviceInfo.deviceUuid().isNull()) {
+		statusMessage = tr("A device needs a non-zero address for a connection.");
 		enableSaveButton = false;
 	}
 #endif
@@ -416,22 +449,48 @@ void BtDeviceSelectionDialog::deviceDiscoveryError(QBluetoothDeviceDiscoveryAgen
 	ui->dialogStatus->setText(tr("Device discovery error: %1.").arg(errorDescription));
 }
 
+extern QString markBLEAddress(const QBluetoothDeviceInfo *device);
+extern QString btDeviceAddress(const QBluetoothDeviceInfo *device, bool isBle);
+
 QString BtDeviceSelectionDialog::getSelectedDeviceAddress()
 {
-	if (selectedRemoteDeviceInfo) {
-		return selectedRemoteDeviceInfo.data()->address().toString();
-	}
+	if (!selectedRemoteDeviceInfo)
+		return QString();
 
-	return QString();
+	int btMode = ui->btMode->currentIndex();
+	QBluetoothDeviceInfo *device = selectedRemoteDeviceInfo.data();
+
+	switch (btMode) {
+	case 0:		// Auto
+	default:
+		return markBLEAddress(device);
+	case 1:		// Force LE
+		return btDeviceAddress(device, true);
+	case 2:		// Force classical
+		return btDeviceAddress(device, false);
+	}
 }
 
 QString BtDeviceSelectionDialog::getSelectedDeviceName()
 {
-	if (selectedRemoteDeviceInfo) {
+	if (selectedRemoteDeviceInfo)
 		return selectedRemoteDeviceInfo.data()->name();
-	}
 
 	return QString();
+}
+
+QString BtDeviceSelectionDialog::getSelectedDeviceText()
+{
+	return formatDeviceText(getSelectedDeviceAddress(), getSelectedDeviceName());
+}
+
+QString BtDeviceSelectionDialog::formatDeviceText(const QString &address, const QString &name)
+{
+	if (address.isEmpty())
+		return name;
+	if (name.isEmpty())
+		return address;
+	return QString("%1 (%2)").arg(name, address);
 }
 
 void BtDeviceSelectionDialog::updateLocalDeviceInformation()
@@ -610,7 +669,7 @@ void WinBluetoothDeviceDiscoveryAgent::run()
 				// Get the last error and emit a signal
 				lastErrorToString = qt_error_string();
 				lastError = QBluetoothDeviceDiscoveryAgent::UnknownError;
-				emit(lastError);
+				emit error(lastError);
 
 				break;
 			}
@@ -624,7 +683,7 @@ void WinBluetoothDeviceDiscoveryAgent::run()
 			deviceAddress.truncate(BTH_ADDR_PRETTY_STRING_LEN);
 
 			// Create an object with information about the discovered device
-			QBluetoothDeviceInfo deviceInfo = QBluetoothDeviceInfo(QBluetoothAddress(deviceAddress), deviceName, 0);
+			QBluetoothDeviceInfo deviceInfo(QBluetoothAddress(deviceAddress), deviceName, 0);
 
 			// Raise a signal with information about the found remote device
 			emit deviceDiscovered(deviceInfo);
@@ -632,7 +691,7 @@ void WinBluetoothDeviceDiscoveryAgent::run()
 			// Get the last error and emit a signal
 			lastErrorToString = qt_error_string();
 			lastError = QBluetoothDeviceDiscoveryAgent::UnknownError;
-			emit(lastError);
+			emit error(lastError);
 		}
 	}
 

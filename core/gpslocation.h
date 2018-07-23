@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #ifndef GPSLOCATION_H
 #define GPSLOCATION_H
 
@@ -10,7 +11,7 @@
 #include <QNetworkReply>
 #include <QMap>
 
-#define GPS_CURRENT_POS QObject::tr("Waiting to aquire GPS location")
+#define GPS_CURRENT_POS gettextFromC::tr("Waiting to aquire GPS location")
 
 struct gpsTracker {
 	degrees_t latitude;
@@ -26,11 +27,13 @@ public:
 	GpsLocation(void (*showMsgCB)(const char *msg), QObject *parent);
 	~GpsLocation();
 	static GpsLocation *instance();
+	static bool hasInstance();
 	bool applyLocations();
 	int getGpsNum() const;
 	QString getUserid(QString user, QString passwd);
 	bool hasLocationsSource();
 	QString currentPosition();
+	void setGpsTimeThreshold(int seconds);
 
 	QMap<qint64, gpsTracker> currentGPSInfo() const;
 
@@ -56,6 +59,7 @@ private:
 
 signals:
 	void haveSourceChanged();
+	void acquiredPosition();
 
 public slots:
 	void serviceEnable(bool toggle);
@@ -66,7 +70,9 @@ public slots:
 	void downloadFromServer();
 	void postError(QNetworkReply::NetworkError error);
 	void getUseridError(QNetworkReply::NetworkError error);
+#ifdef SUBSURFACE_MOBILE
 	void clearGpsData();
+#endif
 	void deleteGpsFix(qint64 when);
 };
 

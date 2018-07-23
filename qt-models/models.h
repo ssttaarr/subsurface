@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * models.h
  *
@@ -25,6 +26,17 @@ class GasSelectionModel : public QStringListModel {
 	Q_OBJECT
 public:
 	static GasSelectionModel *instance();
+	Qt::ItemFlags flags(const QModelIndex &index) const;
+	virtual QVariant data(const QModelIndex &index, int role) const;
+public
+slots:
+	void repopulate();
+};
+
+class DiveTypeSelectionModel : public QStringListModel {
+	Q_OBJECT
+public:
+	static DiveTypeSelectionModel *instance();
 	Qt::ItemFlags flags(const QModelIndex &index) const;
 	virtual QVariant data(const QModelIndex &index, int role) const;
 public

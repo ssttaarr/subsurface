@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #ifndef LOCATIONINFORMATION_H
 #define LOCATIONINFORMATION_H
 
@@ -14,6 +15,7 @@ public:
 
 protected:
 	void showEvent(QShowEvent *);
+	void enableLocationButtons(bool enable);
 
 public slots:
 	void acceptChanges();
@@ -23,6 +25,7 @@ public slots:
 	void enableEdition();
 	void resetState();
 	void resetPallete();
+	void on_diveSiteCountry_textChanged(const QString& text);
 	void on_diveSiteCoordinates_textChanged(const QString& text);
 	void on_diveSiteDescription_textChanged(const QString& text);
 	void on_diveSiteName_textChanged(const QString& text);
@@ -31,6 +34,7 @@ public slots:
 	void mergeSelectedDiveSites();
 private slots:
 	void updateLabels();
+	void updateLocationOnMap();
 signals:
 	void startEditDiveSite(uint32_t uuid);
 	void endEditDiveSite();
@@ -39,8 +43,10 @@ signals:
 	void stopFilterDiveSite();
 	void requestCoordinates();
 	void endRequestCoordinates();
+	void nameChanged(const QString &oldName, const QString &newName);
 
 private:
+	void clearLabels();
 	Ui::LocationInformation ui;
 	bool modified;
 	QAction *acceptAction, *rejectAction;

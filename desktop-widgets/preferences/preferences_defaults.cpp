@@ -1,12 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "preferences_defaults.h"
 #include "ui_preferences_defaults.h"
 #include "core/dive.h"
-#include "core/prefs-macros.h"
 #include "core/subsurface-qt/SettingsObjectWrapper.h"
+#include "core/settings/qPref.h"
 
 #include <QFileDialog>
 
-PreferencesDefaults::PreferencesDefaults(): AbstractPreferencesWidget(tr("Defaults"), QIcon(":defaults"), 0 ), ui(new Ui::PreferencesDefaults())
+PreferencesDefaults::PreferencesDefaults(): AbstractPreferencesWidget(tr("General"), QIcon(":preferences-other-icon"), 0 ), ui(new Ui::PreferencesDefaults())
 {
 	ui->setupUi(this);
 }
@@ -19,7 +20,7 @@ PreferencesDefaults::~PreferencesDefaults()
 void PreferencesDefaults::on_chooseFile_clicked()
 {
 	QFileInfo fi(system_default_filename());
-	QString choosenFileName = QFileDialog::getOpenFileName(this, tr("Open default log file"), fi.absolutePath(), tr("Subsurface XML files (*.ssrf *.xml *.XML)"));
+	QString choosenFileName = QFileDialog::getOpenFileName(this, tr("Open default log file"), fi.absolutePath(), tr("Subsurface files") + " (*.ssrf *.xml)");
 
 	if (!choosenFileName.isEmpty())
 		ui->defaultfilename->setText(choosenFileName);
@@ -52,7 +53,7 @@ void PreferencesDefaults::refreshSettings()
 	ui->localDefaultFile->setChecked(prefs.default_file_behavior == LOCAL_DEFAULT_FILE);
 
 	ui->default_cylinder->clear();
-	for (int i = 0; tank_info[i].name != NULL; i++) {
+	for (int i = 0; tank_info[i].name != NULL && i < MAX_TANK_INFO; i++) {
 		ui->default_cylinder->addItem(tank_info[i].name);
 		if (prefs.default_cylinder && strcmp(tank_info[i].name, prefs.default_cylinder) == 0)
 			ui->default_cylinder->setCurrentIndex(i);
@@ -61,7 +62,7 @@ void PreferencesDefaults::refreshSettings()
 	ui->velocitySlider->setValue(prefs.animation_speed);
 	ui->btnUseDefaultFile->setChecked(prefs.use_default_file);
 
-	if (prefs.cloud_verification_status == CS_VERIFIED) {
+	if (prefs.cloud_verification_status == qPref::CS_VERIFIED) {
 		ui->cloudDefaultFile->setEnabled(true);
 	} else {
 		if (ui->cloudDefaultFile->isChecked())
@@ -87,11 +88,11 @@ void PreferencesDefaults::syncSettings()
 	else if (ui->cloudDefaultFile->isChecked())
 		general->setDefaultFileBehavior(CLOUD_DEFAULT_FILE);
 
-	auto display =  SettingsObjectWrapper::instance()->display_settings;
-	display->setDivelistFont(ui->font->currentFont().toString());
-	display->setFontSize(ui->fontsize->value());
-	display->setDisplayInvalidDives(ui->displayinvalid->isChecked());
+	auto display =  qPrefDisplay::instance();
+	display->set_divelist_font(ui->font->currentFont().toString());
+	display->set_font_size(ui->fontsize->value());
+	display->set_display_invalid_dives(ui->displayinvalid->isChecked());
 
-	auto animation = SettingsObjectWrapper::instance()->animation_settings;
-	animation->setAnimationSpeed(ui->velocitySlider->value());
+	auto animation = qPrefAnimations::instance();
+	animation->set_animation_speed(ui->velocitySlider->value());
 }

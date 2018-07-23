@@ -1,4 +1,4 @@
-#include "core/dive.h"
+// SPDX-License-Identifier: GPL-2.0
 #include "testgpscoords.h"
 
 //unit under test

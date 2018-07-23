@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #ifndef CONFIGUREDIVECOMPUTERDIALOG_H
 #define CONFIGUREDIVECOMPUTERDIALOG_H
 
@@ -97,25 +98,22 @@ private:
 
 	QString logFile;
 
-	QStringList vendorList;
-	QHash<QString, QStringList> productList;
-
 	ConfigureDiveComputer *config;
 	device_data_t device_data;
 	void getDeviceData();
 
-	QHash<QString, dc_descriptor_t *> descriptorLookup;
 	void fill_device_list(int dc_type);
-	void fill_computer_list();
 
 	DeviceDetails *deviceDetails;
 	void populateDeviceDetails();
 	void populateDeviceDetailsOSTC3();
 	void populateDeviceDetailsOSTC();
 	void populateDeviceDetailsSuuntoVyper();
+	void populateDeviceDetailsOSTC4();
 	void reloadValuesOSTC3();
 	void reloadValuesOSTC();
 	void reloadValuesSuuntoVyper();
+	void reloadValuesOSTC4();
 
 	QString selected_vendor;
 	QString selected_product;

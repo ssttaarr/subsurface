@@ -11,7 +11,16 @@
   <xsl:template match="/">
     <divelog program="subsurface-import" version="2">
       <settings>
-        <divecomputerid deviceid="ffffffff">
+        <divecomputerid>
+          <xsl:attribute name="deviceid">
+            <xsl:value-of select="/uddf/diver/owner/equipment/divecomputer/@id|/u:uddf/u:diver/u:owner/u:equipment/u:divecomputer/@id|/u1:uddf/u1:diver/u1:owner/u1:equipment/u1:divecomputer/@id" />
+          </xsl:attribute>
+          <xsl:attribute name="model">
+            <xsl:value-of select="/uddf/diver/owner/equipment/divecomputer/model|/u:uddf/u:diver/u:owner/u:equipment/u:divecomputer/u:model|/u1:uddf/u1:diver/u1:owner/u1:equipment/u1:divecomputer/u1:model" />
+          </xsl:attribute>
+          <xsl:attribute name="nickname">
+            <xsl:value-of select="/uddf/diver/owner/equipment/divecomputer/name|/u:uddf/u:diver/u:owner/u:equipment/u:divecomputer/u:name|/u1:uddf/u1:diver/u1:owner/u1:equipment/u1:divecomputer/u1:name" />
+          </xsl:attribute>
           <xsl:choose>
             <xsl:when test="/UDDF/history != ''">
               <xsl:apply-templates select="/UDDF/history"/>
@@ -173,12 +182,17 @@
         </xsl:variable>
         <xsl:if test="//u:divesite/u:site[@id = $ref]/u:name">
           <location>
-            <xsl:if test="//u:divesite/u:site[@id=$ref]/u:geography/u:longitude != ''">
-              <xsl:attribute name="gps">
-                <xsl:value-of select="concat(//u:divesite/u:site[@id=$ref]/u:geography/u:latitude, ' ', //u:divesite/u:site[@id=$ref]/u:geography/u:longitude)"/>
-              </xsl:attribute>
-              <xsl:value-of select="//u:divesite/u:site[@id=$ref]/u:name"/>
-            </xsl:if>
+            <xsl:choose>
+              <xsl:when test="//u:divesite/u:site[@id=$ref]/u:geography/u:longitude != ''">
+                <xsl:attribute name="gps">
+                  <xsl:value-of select="concat(//u:divesite/u:site[@id=$ref]/u:geography/u:latitude, ' ', //u:divesite/u:site[@id=$ref]/u:geography/u:longitude)"/>
+                </xsl:attribute>
+                <xsl:value-of select="//u:divesite/u:site[@id=$ref]/u:name"/>
+              </xsl:when>
+              <xsl:otherwise>
+                <xsl:value-of select="//u:divesite/u:site[@id=$ref]/u:name"/>
+              </xsl:otherwise>
+            </xsl:choose>
           </location>
         </xsl:if>
       </xsl:for-each>
@@ -209,12 +223,12 @@
         </buddy>
       </xsl:if>
 
-      <xsl:if test="buddy_ref/@ref|informationbeforedive/buddy_ref/@ref != ''">
+      <xsl:if test="buddy_ref/@ref|informationbeforedive/buddy_ref/@ref|u:informationbeforedive/u:link/@ref != ''">
         <buddy>
           <xsl:variable name="ref">
-            <xsl:value-of select="buddy_ref/@ref|informationbeforedive/buddy_ref/@ref"/>
+            <xsl:value-of select="buddy_ref/@ref|informationbeforedive/buddy_ref/@ref|u:informationbeforedive/u:link/@ref"/>
           </xsl:variable>
-          <xsl:for-each select="//diver[@id=$ref]/personal/first_name|//diver[@id=$ref]/personal/nick_name|//diver[@id=$ref]/personal/family_name|//diver/buddy[@id=$ref]/personal/first_name|//diver/buddy[@id=$ref]/personal/nick_name|//diver/buddy[@id=$ref]/personal/family_name">
+          <xsl:for-each select="//diver[@id=$ref]/personal/first_name|//diver[@id=$ref]/personal/nick_name|//diver[@id=$ref]/personal/family_name|//diver/buddy[@id=$ref]/personal/first_name|//diver/buddy[@id=$ref]/personal/nick_name|//diver/buddy[@id=$ref]/personal/family_name|//u:diver/u:buddy[@id=$ref]/u:personal/u:first_name|//u:diver/u:buddy[@id=$ref]/u:personal/u:nick_name|//u:diver/u:buddy[@id=$ref]/u:personal/u:family_name">
             <xsl:value-of select="."/>
             <xsl:if test=". != '' and (following-sibling::*[1] != '' or following-sibling::*[2] != '')"> / </xsl:if>
           </xsl:for-each>
@@ -271,12 +285,16 @@
             <xsl:attribute name="he">
               <xsl:value-of select="//gas_mix[@id=$gas]/he"/>
             </xsl:attribute>
-            <xsl:attribute name="start">
-              <xsl:value-of select="concat(substring-before(./pressure_start, '.') div 100000, ' bar')"/>
-            </xsl:attribute>
-            <xsl:attribute name="end">
-              <xsl:value-of select="concat(substring-before(./pressure_end, '.') div 100000, ' bar')"/>
-            </xsl:attribute>
+            <xsl:if test="./pressure_start != ''">
+              <xsl:attribute name="start">
+                <xsl:value-of select="concat(substring-before(./pressure_start, '.') div 100000, ' bar')"/>
+              </xsl:attribute>
+            </xsl:if>
+            <xsl:if test="./pressure_end != ''">
+              <xsl:attribute name="end">
+                <xsl:value-of select="concat(substring-before(./pressure_end, '.') div 100000, ' bar')"/>
+              </xsl:attribute>
+            </xsl:if>
           </cylinder>
         </xsl:for-each>
       </xsl:if>
@@ -330,10 +348,41 @@
       </xsl:for-each>
 
 
-      <divecomputer deviceid="ffffffff">
-        <xsl:attribute name="model">
-          <xsl:value-of select="/uddf/generator/name|/u:uddf/u:generator/u:name|/u1:uddf/u1:generator/u1:name|/UDDF/history/modified/application/name"/>
+      <divecomputer>
+        <xsl:attribute name="deviceid">
+          <xsl:value-of select="/uddf/diver/owner/equipment/divecomputer/@id|/u:uddf/u:diver/u:owner/u:equipment/u:divecomputer/@id|/u1:uddf/u1:diver/u1:owner/u1:equipment/u1:divecomputer/@id" />
         </xsl:attribute>
+        <xsl:attribute name="model">
+          <xsl:choose>
+            <xsl:when test="/uddf/diver/owner/equipment/divecomputer/model|/u:uddf/u:diver/u:owner/u:equipment/u:divecomputer/u:model|/u1:uddf/u1:diver/u1:owner/u1:equipment/u1:divecomputer/u1:model != ''">
+                <xsl:value-of select="/uddf/diver/owner/equipment/divecomputer/model|/u:uddf/u:diver/u:owner/u:equipment/u:divecomputer/u:model|/u1:uddf/u1:diver/u1:owner/u1:equipment/u1:divecomputer/u1:model" />
+              </xsl:when>
+              <xsl:otherwise>
+              <xsl:value-of select="/uddf/generator/name|/u:uddf/u:generator/u:name|/u1:uddf/u1:generator/u1:name|/UDDF/history/modified/application/name"/>
+            </xsl:otherwise>
+          </xsl:choose>
+        </xsl:attribute>
+
+      <!-- Divemode -->
+      <xsl:if test="samples/waypoint/divemode/@type|u:samples/u:waypoint/u:divemode/@type|u1:samples/u1:waypoint/u1:divemode/@type != ''">
+        <xsl:attribute name='dctype'>
+          <xsl:choose>
+            <xsl:when test="samples/waypoint/divemode/@type|u:samples/u:waypoint/u:divemode/@type|u1:samples/u1:waypoint/u1:divemode/@type = 'apnoe'
+              or samples/waypoint/divemode/@type|u:samples/u:waypoint/u:divemode/@type|u1:samples/u1:waypoint/u1:divemode/@type = 'apnea'">
+              <xsl:text>Freedive</xsl:text>
+            </xsl:when>
+            <xsl:when test="samples/waypoint/divemode/@type|u:samples/u:waypoint/u:divemode/@type|u1:samples/u1:waypoint/u1:divemode/@type = 'closedcircuit'">
+              <xsl:text>CCR</xsl:text>
+            </xsl:when>
+            <xsl:when test="samples/waypoint/divemode/@type|u:samples/u:waypoint/u:divemode/@type|u1:samples/u1:waypoint/u1:divemode/@type = 'semiclosedcircuit'">
+              <xsl:text>PSCR</xsl:text>
+            </xsl:when>
+            <xsl:otherwise>
+              <xsl:text>OC</xsl:text>
+            </xsl:otherwise>
+          </xsl:choose>
+        </xsl:attribute>
+      </xsl:if>
 
       <depth>
         <xsl:for-each select="greatestdepth|informationafterdive/greatestdepth|u:greatestdepth|u:informationafterdive/u:greatestdepth|u1:greatestdepth|u1:informationafterdive/u1:greatestdepth|max_depth">
@@ -471,17 +520,17 @@
             <xsl:choose>
               <xsl:when test="depth != ''">
                 <xsl:attribute name="depth">
-                  <xsl:value-of select="concat(format-number(depth, '0.00'), ' m')"/>
+                  <xsl:value-of select="concat(format-number(translate(depth, ',', '.'), '0.00'), ' m')"/>
                 </xsl:attribute>
               </xsl:when>
               <xsl:when test="u:depth|u1:depth != ''">
                 <xsl:attribute name="depth">
-                  <xsl:value-of select="concat(format-number(u:depth|u1:depth, '0.00'), ' m')"/>
+                  <xsl:value-of select="concat(format-number(translate(u:depth|u1:depth, ',', '.'), '0.00'), ' m')"/>
                 </xsl:attribute>
               </xsl:when>
               <xsl:when test=". != 0">
                 <xsl:attribute name="depth">
-                  <xsl:value-of select="concat(format-number(., '0.00'), ' m')"/>
+                  <xsl:value-of select="concat(format-number(translate(., ',', '.'), '0.00'), ' m')"/>
                 </xsl:attribute>
               </xsl:when>
             </xsl:choose>

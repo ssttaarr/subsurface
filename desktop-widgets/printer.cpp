@@ -1,7 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "printer.h"
 #include "templatelayout.h"
 #include "core/statistics.h"
-#include "core/helpers.h"
+#include "core/qthelper.h"
 
 #include <algorithm>
 #include <QPainter>
@@ -40,7 +41,7 @@ void Printer::putProfileImage(QRect profilePlaceholder, QRect viewPort, QPainter
 	int y = profilePlaceholder.y() - viewPort.y();
 	// use the placeHolder and the viewPort position to calculate the relative position of the dive profile.
 	QRect pos(x, y, profilePlaceholder.width(), profilePlaceholder.height());
-	profile->plotDive(dive, true);
+	profile->plotDive(dive, true, true);
 
 	if (!printOptions->color_selected) {
 		QImage image(pos.width(), pos.height(), QImage::Format_ARGB32);
@@ -104,7 +105,7 @@ void Printer::flowRender()
 			webView->page()->mainFrame()->scroll(0, dontbreakElement.geometry().y() - start);
 
 			// rendering progress is 4/5 of total work
-			emit(progessUpdated((end * 80.0 / fullPageResolution) + done));
+			emit(progessUpdated(lrint((end * 80.0 / fullPageResolution) + done)));
 
 			// add new pages only in print mode, while previewing we don't add new pages
 			if (printMode == Printer::PRINT)
@@ -183,7 +184,7 @@ void Printer::render(int Pages = 0)
 		viewPort.adjust(0, pageSize.height(), 0, pageSize.height());
 
 		// rendering progress is 4/5 of total work
-		emit(progessUpdated((i * 80.0 / Pages) + done));
+		emit(progessUpdated(lrint((i * 80.0 / Pages) + done)));
 		if (i < Pages - 1 && printMode == Printer::PRINT)
 			static_cast<QPrinter*>(paintDevice)->newPage();
 	}
@@ -203,7 +204,7 @@ void Printer::render(int Pages = 0)
 	prefs.animation_speed = animationOriginal;
 
 	//replot the dive after returning the settings
-	profile->plotDive(0, true);
+	profile->plotDive(0, true, true);
 }
 
 //value: ranges from 0 : 100 and shows the progress of the templating engine
@@ -237,7 +238,7 @@ void Printer::print()
 	webView->page()->mainFrame()->setScrollBarPolicy(Qt::Vertical, Qt::ScrollBarAlwaysOff);
 #endif
 	// export border width with at least 1 pixel
-	templateOptions->border_width = std::max(1, pageSize.width() / 1000);
+	// templateOptions->borderwidth = std::max(1, pageSize.width() / 1000);
 	if (printOptions->type == print_options::DIVELIST) {
 		webView->setHtml(t.generate());
 	} else if (printOptions->type == print_options::STATISTICS ) {
@@ -284,7 +285,7 @@ void Printer::previewOnePage()
 		webView->page()->setViewportSize(pageSize);
 #endif
 		// initialize the border settings
-		templateOptions->border_width = std::max(1, pageSize.width() / 1000);
+		// templateOptions->border_width = std::max(1, pageSize.width() / 1000);
 		if (printOptions->type == print_options::DIVELIST) {
 			webView->setHtml(t.generate());
 		} else if (printOptions->type == print_options::STATISTICS ) {

@@ -1,9 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "qt-models/weightmodel.h"
-#include "core/dive.h"
+#include "core/subsurface-string.h"
 #include "core/gettextfromc.h"
 #include "core/metrics.h"
-#include "core/helpers.h"
-#include "qt-models/weigthsysteminfomodel.h"
+#include "core/qthelper.h"
+#include "qt-models/weightsysteminfomodel.h"
 
 WeightModel::WeightModel(QObject *parent) : CleanerTableModel(parent),
 	changed(false),
@@ -57,7 +58,7 @@ QVariant WeightModel::data(const QModelIndex &index, int role) const
 	case Qt::EditRole:
 		switch (index.column()) {
 		case TYPE:
-			ret = gettextFromC::instance()->tr(ws->description);
+			ret = gettextFromC::tr(ws->description);
 			break;
 		case WEIGHT:
 			ret = get_weight_string(ws->weight, true);
@@ -102,29 +103,29 @@ bool WeightModel::setData(const QModelIndex &index, const QVariant &value, int r
 	switch (index.column()) {
 	case TYPE:
 		if (!value.isNull()) {
-			//TODO: C-function weigth_system_set_description ?
-			if (!ws->description || gettextFromC::instance()->tr(ws->description) != vString) {
+			//TODO: C-function weight_system_set_description ?
+			if (!ws->description || gettextFromC::tr(ws->description) != vString) {
 				// loop over translations to see if one matches
 				int i = -1;
-				while (ws_info[++i].name) {
-					if (gettextFromC::instance()->tr(ws_info[i].name) == vString) {
+				while (ws_info[++i].name && i < MAX_WS_INFO) {
+					if (gettextFromC::tr(ws_info[i].name) == vString) {
 						ws->description = copy_string(ws_info[i].name);
 						break;
 					}
 				}
 				if (ws_info[i].name == NULL) // didn't find a match
-					ws->description = strdup(vString.toUtf8().constData());
+					ws->description = copy_qstring(vString);
 				changed = true;
 			}
 		}
 		break;
 	case WEIGHT:
 		if (CHANGED()) {
-			ws->weight = string_to_weight(vString.toUtf8().data());
+			ws->weight = string_to_weight(qPrintable(vString));
 			// now update the ws_info
 			changed = true;
 			WSInfoModel *wsim = WSInfoModel::instance();
-			QModelIndexList matches = wsim->match(wsim->index(0, 0), Qt::DisplayRole, gettextFromC::instance()->tr(ws->description));
+			QModelIndexList matches = wsim->match(wsim->index(0, 0), Qt::DisplayRole, gettextFromC::tr(ws->description));
 			if (!matches.isEmpty())
 				wsim->setData(wsim->index(matches.first().row(), WSInfoModel::GR), ws->weight.grams);
 		}
@@ -141,9 +142,8 @@ Qt::ItemFlags WeightModel::flags(const QModelIndex &index) const
 	return QAbstractItemModel::flags(index) | Qt::ItemIsEditable;
 }
 
-int WeightModel::rowCount(const QModelIndex &parent) const
+int WeightModel::rowCount(const QModelIndex&) const
 {
-	Q_UNUSED(parent);
 	return rows;
 }
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (c) 2013 Maximilian Güntner <maximilian.guentner@gmail.com>
  *
@@ -35,6 +36,7 @@
 #include <QStyle>
 #include <QStyleOptionFocusRect>
 #include <QDebug>
+#include <cmath>
 
 struct GroupedLineEdit::Private {
 	struct Block {
@@ -91,11 +93,6 @@ void GroupedLineEdit::addColor(QColor color)
 	d->colors.append(color);
 }
 
-void GroupedLineEdit::removeAllColors()
-{
-	d->colors.clear();
-}
-
 QStringList GroupedLineEdit::getBlockStringList()
 {
 	QStringList retList;
@@ -139,9 +136,9 @@ QSize GroupedLineEdit::sizeHint() const
 {
 	QSize rs(
 		40,
-		document()->findBlock(0).layout()->lineAt(0).height() +
+		lrint(document()->findBlock(0).layout()->lineAt(0).height() +
 			document()->documentMargin() * 2 +
-			frameWidth() * 2);
+			frameWidth() * 2));
 	return rs;
 }
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "testgitstorage.h"
 #include "git2.h"
 
@@ -11,13 +12,17 @@
 #include <QTextStream>
 #include <QNetworkProxy>
 #include <QSettings>
+#include <QTextCodec>
 #include <QDebug>
 
 // this is a local helper function in git-access.c
 extern "C" char *get_local_dir(const char *remote, const char *branch);
 
-void TestGitStorage::testSetup()
+void TestGitStorage::initTestCase()
 {
+	// Set UTF8 text codec as in real applications
+	QTextCodec::setCodecForLocale(QTextCodec::codecForMib(106));
+
 	// first, setup the preferences an proxy information
 	copy_prefs(&default_prefs, &prefs);
 	QCoreApplication::setOrganizationName("Subsurface");
@@ -38,11 +43,10 @@ void TestGitStorage::testSetup()
 	QString gitUrl(prefs.cloud_base_url);
 	if (gitUrl.right(1) != "/")
 		gitUrl += "/";
-	prefs.cloud_git_url = strdup(qPrintable(gitUrl + "git"));
+	prefs.cloud_git_url = copy_qstring(gitUrl + "git");
 	s.endGroup();
 	prefs.cloud_storage_email_encoded = strdup("ssrftest@hohndel.org");
 	prefs.cloud_storage_password = strdup("geheim");
-	prefs.cloud_background_sync = true;
 	QNetworkProxy proxy;
 	proxy.setType(QNetworkProxy::ProxyType(prefs.proxy_type));
 	proxy.setHostName(prefs.proxy_host);
@@ -59,21 +63,45 @@ void TestGitStorage::testSetup()
 	QCOMPARE(localCacheDirectory.removeRecursively(), true);
 }
 
+void TestGitStorage::cleanup()
+{
+	clear_dive_file_data();
+}
+
+void TestGitStorage::testGitStorageLocal_data()
+{
+	// Test different paths we may encounter (since storage depends on user name)
+	// as well as with and without "file://" URL prefix.
+	QTest::addColumn<QString>("testDirName");
+	QTest::addColumn<QString>("prefixRead");
+	QTest::addColumn<QString>("prefixWrite");
+	QTest::newRow("ASCII path") << "./gittest" << "" << "";
+	QTest::newRow("Non ASCII path") << "./gittest_éèêôàüäößíñóúäåöø" << "" << "";
+	QTest::newRow("ASCII path with file:// prefix on read") << "./gittest2" << "file://" << "";
+	QTest::newRow("Non ASCII path with file:// prefix on read") << "./gittest2_éèêôàüäößíñóúäåöø" << "" << "file://";
+	QTest::newRow("ASCII path with file:// prefix on write") << "./gittest3" << "file://" << "";
+	QTest::newRow("Non ASCII path with file:// prefix on write") << "./gittest3_éèêôàüäößíñóúäåöø" << "" << "file://";
+}
+
 void TestGitStorage::testGitStorageLocal()
 {
 	// test writing and reading back from local git storage
 	git_repository *repo;
 	git_libgit2_init();
-	QCOMPARE(parse_file(SUBSURFACE_SOURCE "/dives/SampleDivesV2.ssrf"), 0);
-	QString testDirName("./gittest");
+	QCOMPARE(parse_file(SUBSURFACE_TEST_DATA "/dives/SampleDivesV2.ssrf"), 0);
+	QFETCH(QString, testDirName);
+	QFETCH(QString, prefixRead);
+	QFETCH(QString, prefixWrite);
 	QDir testDir(testDirName);
 	QCOMPARE(testDir.removeRecursively(), true);
 	QCOMPARE(QDir().mkdir(testDirName), true);
+	QString repoNameRead = prefixRead + testDirName;
+	QString repoNameWrite = prefixWrite + testDirName;
 	QCOMPARE(git_repository_init(&repo, qPrintable(testDirName), false), 0);
-	QCOMPARE(save_dives(qPrintable(testDirName + "[test]")), 0);
+	QCOMPARE(save_dives(qPrintable(repoNameWrite + "[test]")), 0);
 	QCOMPARE(save_dives("./SampleDivesV3.ssrf"), 0);
 	clear_dive_file_data();
-	QCOMPARE(parse_file(qPrintable(testDirName + "[test]")), 0);
+	QCOMPARE(parse_file(qPrintable(repoNameRead + "[test]")), 0);
 	QCOMPARE(save_dives("./SampleDivesV3viagit.ssrf"), 0);
 	QFile org("./SampleDivesV3.ssrf");
 	org.open(QFile::ReadOnly);
@@ -84,7 +112,6 @@ void TestGitStorage::testGitStorageLocal()
 	QString readin = orgS.readAll();
 	QString written = outS.readAll();
 	QCOMPARE(readin, written);
-	clear_dive_file_data();
 }
 
 void TestGitStorage::testGitStorageCloud()
@@ -93,7 +120,7 @@ void TestGitStorage::testGitStorageCloud()
 	// connect to the ssrftest repository on the cloud server
 	// and repeat the same test as before with the local git storage
 	QString cloudTestRepo("https://cloud.subsurface-divelog.org/git/ssrftest@hohndel.org[ssrftest@hohndel.org]");
-	QCOMPARE(parse_file(SUBSURFACE_SOURCE "/dives/SampleDivesV2.ssrf"), 0);
+	QCOMPARE(parse_file(SUBSURFACE_TEST_DATA "/dives/SampleDivesV2.ssrf"), 0);
 	QCOMPARE(save_dives(qPrintable(cloudTestRepo)), 0);
 	clear_dive_file_data();
 	QCOMPARE(parse_file(qPrintable(cloudTestRepo)), 0);
@@ -107,7 +134,6 @@ void TestGitStorage::testGitStorageCloud()
 	QString readin = orgS.readAll();
 	QString written = outS.readAll();
 	QCOMPARE(readin, written);
-	clear_dive_file_data();
 }
 
 void TestGitStorage::testGitStorageCloudOfflineSync()
@@ -119,7 +145,7 @@ void TestGitStorage::testGitStorageCloudOfflineSync()
 	QString localCacheRepo = localCacheDir + "[ssrftest@hohndel.org]";
 	// read the local repo from the previous test and add dive 10
 	QCOMPARE(parse_file(qPrintable(localCacheRepo)), 0);
-	QCOMPARE(parse_file(SUBSURFACE_SOURCE "/dives/test10.xml"), 0);
+	QCOMPARE(parse_file(SUBSURFACE_TEST_DATA "/dives/test10.xml"), 0);
 	// calling process_dive() sorts the table, but calling it with
 	// is_imported == true causes it to try to update the window title... let's not do that
 	process_dives(false, false);
@@ -157,7 +183,6 @@ void TestGitStorage::testGitStorageCloudOfflineSync()
 	readin = orgS2.readAll();
 	written = outS2.readAll();
 	QCOMPARE(readin, written);
-	clear_dive_file_data();
 }
 
 void TestGitStorage::testGitStorageCloudMerge()
@@ -169,14 +194,14 @@ void TestGitStorage::testGitStorageCloudMerge()
 	QString localCacheDir(get_local_dir("https://cloud.subsurface-divelog.org/git/ssrftest@hohndel.org", "ssrftest@hohndel.org"));
 	QString localCacheRepoSave = localCacheDir + "save[ssrftest@hohndel.org]";
 	QCOMPARE(parse_file(qPrintable(localCacheRepoSave)), 0);
-	QCOMPARE(parse_file(SUBSURFACE_SOURCE "/dives/test11.xml"), 0);
+	QCOMPARE(parse_file(SUBSURFACE_TEST_DATA "/dives/test11.xml"), 0);
 	process_dives(false, false);
 	QCOMPARE(save_dives(qPrintable(localCacheRepoSave)), 0);
 	clear_dive_file_data();
 
 	// now we open the cloud storage repo and add a different dive to it
 	QCOMPARE(parse_file(qPrintable(cloudTestRepo)), 0);
-	QCOMPARE(parse_file(SUBSURFACE_SOURCE "/dives/test12.xml"), 0);
+	QCOMPARE(parse_file(SUBSURFACE_TEST_DATA "/dives/test12.xml"), 0);
 	process_dives(false, false);
 	QCOMPARE(save_dives(qPrintable(cloudTestRepo)), 0);
 	clear_dive_file_data();
@@ -188,24 +213,23 @@ void TestGitStorage::testGitStorageCloudMerge()
 	QDir localCacheDirectorySave(localCacheDir + "save");
 	QCOMPARE(localCacheDirectory.rename(localCacheDir + "save", localCacheDir), true);
 	QCOMPARE(parse_file(qPrintable(cloudTestRepo)), 0);
-	QCOMPARE(save_dives("./SapleDivesV3plus10-11-12-merged.ssrf"), 0);
+	QCOMPARE(save_dives("./SampleDivesV3plus10-11-12-merged.ssrf"), 0);
 	clear_dive_file_data();
 	QCOMPARE(parse_file("./SampleDivesV3plus10local.ssrf"), 0);
-	QCOMPARE(parse_file(SUBSURFACE_SOURCE "/dives/test11.xml"), 0);
+	QCOMPARE(parse_file(SUBSURFACE_TEST_DATA "/dives/test11.xml"), 0);
 	process_dives(false, false);
-	QCOMPARE(parse_file(SUBSURFACE_SOURCE "/dives/test12.xml"), 0);
+	QCOMPARE(parse_file(SUBSURFACE_TEST_DATA "/dives/test12.xml"), 0);
 	process_dives(false, false);
-	QCOMPARE(save_dives("./SapleDivesV3plus10-11-12.ssrf"), 0);
-	QFile org("./SapleDivesV3plus10-11-12-merged.ssrf");
+	QCOMPARE(save_dives("./SampleDivesV3plus10-11-12.ssrf"), 0);
+	QFile org("./SampleDivesV3plus10-11-12-merged.ssrf");
 	org.open(QFile::ReadOnly);
-	QFile out("./SapleDivesV3plus10-11-12.ssrf");
+	QFile out("./SampleDivesV3plus10-11-12.ssrf");
 	out.open(QFile::ReadOnly);
 	QTextStream orgS(&org);
 	QTextStream outS(&out);
 	QString readin = orgS.readAll();
 	QString written = outS.readAll();
 	QCOMPARE(readin, written);
-	clear_dive_file_data();
 }
 
 void TestGitStorage::testGitStorageCloudMerge2()
@@ -260,7 +284,6 @@ void TestGitStorage::testGitStorageCloudMerge2()
 	QString readin = orgS.readAll();
 	QString written = outS.readAll();
 	QCOMPARE(readin, written);
-	clear_dive_file_data();
 }
 
 void TestGitStorage::testGitStorageCloudMerge3()
@@ -326,7 +349,6 @@ void TestGitStorage::testGitStorageCloudMerge3()
 	QCOMPARE(save_dives("./SampleDivesMerge3.ssrf"), 0);
 	// we are not trying to compare this to a pre-determined result... what this test
 	// checks is that there are no parsing errors with the merge
-	clear_dive_file_data();
 }
 
 QTEST_GUILESS_MAIN(TestGitStorage)

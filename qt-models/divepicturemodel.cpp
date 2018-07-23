@@ -1,32 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "qt-models/divepicturemodel.h"
 #include "core/dive.h"
 #include "core/metrics.h"
 #include "core/divelist.h"
 #include "core/imagedownloader.h"
+#include "core/qthelper.h"
 
-#include <QtConcurrent>
-
-extern QHash <QString, QImage > thumbnailCache;
-
-
-SPixmap scaleImages(picturepointer picture)
-{
-	SPixmap ret;
-	ret.first = picture;
-	if (thumbnailCache.contains(picture->filename) && !thumbnailCache.value(picture->filename).isNull()) {
-		ret.second = thumbnailCache.value(picture->filename);
-	} else {
-		int dim = defaultIconMetrics().sz_pic;
-		QImage p = SHashedImage(picture);
-		if(!p.isNull()) {
-			p = p.scaled(dim, dim, Qt::KeepAspectRatio);
-			thumbnailCache.insert(picture->filename, p);
-		}
-		ret.second = p;
-	}
-	return ret;
-}
-
+#include <QFileInfo>
 
 DivePictureModel *DivePictureModel::instance()
 {
@@ -34,51 +14,65 @@ DivePictureModel *DivePictureModel::instance()
 	return self;
 }
 
-DivePictureModel::DivePictureModel() : numberOfPictures(0)
+DivePictureModel::DivePictureModel() : zoomLevel(0.0)
 {
+	connect(Thumbnailer::instance(), &Thumbnailer::thumbnailChanged,
+		this, &DivePictureModel::updateThumbnail, Qt::QueuedConnection);
 }
 
-
-void DivePictureModel::updateDivePicturesWhenDone(QList<QFuture<void> > futures)
+void DivePictureModel::setZoomLevel(int level)
 {
-	Q_FOREACH (QFuture<void> f, futures) {
-		f.waitForFinished();
-	}
-	updateDivePictures();
+	zoomLevel = level / 10.0;
+	// zoomLevel is bound by [-1.0 1.0], see comment below.
+	if (zoomLevel < -1.0)
+		zoomLevel = -1.0;
+	if (zoomLevel > 1.0)
+		zoomLevel = 1.0;
+	updateZoom();
+	layoutChanged();
+}
+
+void DivePictureModel::updateZoom()
+{
+	size = Thumbnailer::thumbnailSize(zoomLevel);
+}
+
+void DivePictureModel::updateThumbnails()
+{
+	updateZoom();
+	for (PictureEntry &entry: pictures)
+		entry.image = Thumbnailer::instance()->fetchThumbnail(entry.filename);
 }
 
 void DivePictureModel::updateDivePictures()
 {
-	if (numberOfPictures != 0) {
-		beginRemoveRows(QModelIndex(), 0, numberOfPictures - 1);
-		numberOfPictures = 0;
-		endRemoveRows();
+	beginResetModel();
+	if (!pictures.isEmpty()) {
+		pictures.clear();
+		Thumbnailer::instance()->clearWorkQueue();
 	}
 
-	// if the dive_table is empty, ignore the displayed_dive
-	numberOfPictures = dive_table.nr == 0 ? 0 : dive_get_picture_count(&displayed_dive);
-	if (numberOfPictures == 0) {
-		return;
+	int i;
+	struct dive *dive;
+	for_each_dive (i, dive) {
+		if (dive->selected) {
+			int first = pictures.count();
+			FOR_EACH_PICTURE(dive)
+				pictures.push_back({ dive->id, picture, picture->filename, {}, picture->offset.seconds });
+
+			// Sort pictures of this dive by offset.
+			// Thus, the list will be sorted by (diveId, offset).
+			std::sort(pictures.begin() + first, pictures.end(),
+				  [](const PictureEntry &a, const PictureEntry &b) { return a.offsetSeconds < b.offsetSeconds; });
+		}
 	}
 
-	stringPixmapCache.clear();
-	SPictureList pictures;
-	FOR_EACH_PICTURE_NON_PTR(displayed_dive) {
-		stringPixmapCache[QString(picture->filename)].offsetSeconds = picture->offset.seconds;
-		pictures.push_back(picture);
-	}
-
-	QList<SPixmap> list = QtConcurrent::blockingMapped(pictures, scaleImages);
-	Q_FOREACH (const SPixmap &pixmap, list)
-		stringPixmapCache[pixmap.first->filename].image = pixmap.second;
-
-	beginInsertRows(QModelIndex(), 0, numberOfPictures - 1);
-	endInsertRows();
+	updateThumbnails();
+	endResetModel();
 }
 
-int DivePictureModel::columnCount(const QModelIndex &parent) const
+int DivePictureModel::columnCount(const QModelIndex&) const
 {
-	Q_UNUSED(parent);
 	return 2;
 }
 
@@ -88,45 +82,131 @@ QVariant DivePictureModel::data(const QModelIndex &index, int role) const
 	if (!index.isValid())
 		return ret;
 
-	QString key = stringPixmapCache.keys().at(index.row());
+	const PictureEntry &entry = pictures.at(index.row());
 	if (index.column() == 0) {
 		switch (role) {
 		case Qt::ToolTipRole:
-			ret = key;
+			ret = entry.filename;
 			break;
 		case Qt::DecorationRole:
-			ret = stringPixmapCache[key].image;
+			ret = entry.image.scaled(size, size, Qt::KeepAspectRatio);
 			break;
 		case Qt::DisplayRole:
-			ret = QFileInfo(key).fileName();
+			ret = QFileInfo(entry.filename).fileName();
 			break;
 		case Qt::DisplayPropertyRole:
-			ret = QFileInfo(key).filePath();
+			ret = QFileInfo(entry.filename).filePath();
+			break;
+		case Qt::UserRole:
+			ret = entry.diveId;
+			break;
 		}
 	} else if (index.column() == 1) {
 		switch (role) {
-		case Qt::UserRole:
-			ret = QVariant::fromValue((int)stringPixmapCache[key].offsetSeconds);
-		break;
 		case Qt::DisplayRole:
-			ret = key;
+			ret = entry.filename;
+			break;
 		}
 	}
 	return ret;
 }
 
-void DivePictureModel::removePicture(const QString &fileUrl, bool last)
+// Return true if we actually removed a picture
+static bool removePictureFromSelectedDive(const char *fileUrl)
 {
-	dive_remove_picture(fileUrl.toUtf8().data());
-	if (last) {
-		copy_dive(current_dive, &displayed_dive);
-		updateDivePictures();
-		mark_divelist_changed(true);
+	int i;
+	struct dive *dive;
+	for_each_dive (i, dive) {
+		if (dive->selected && dive_remove_picture(dive, fileUrl))
+			return true;
+	}
+	return false;
+}
+
+void DivePictureModel::removePictures(const QVector<QString> &fileUrls)
+{
+	bool removed = false;
+	for (const QString &fileUrl: fileUrls)
+		removed |= removePictureFromSelectedDive(qPrintable(fileUrl));
+	if (!removed)
+		return;
+	copy_dive(current_dive, &displayed_dive);
+	mark_divelist_changed(true);
+
+	for (int i = 0; i < pictures.size(); ++i) {
+		// Find range [i j) of pictures to remove
+		if (std::find(fileUrls.begin(), fileUrls.end(), pictures[i].filename) == fileUrls.end())
+			continue;
+		int j;
+		for (j = i + 1; j < pictures.size(); ++j) {
+			if (std::find(fileUrls.begin(), fileUrls.end(), pictures[j].filename) == fileUrls.end())
+				break;
+		}
+
+		// Qt's model-interface is surprisingly idiosyncratic: you don't pass [first last), but [first last] ranges.
+		// For example, an empty list would be [0 -1].
+		beginRemoveRows(QModelIndex(), i, j - 1);
+		pictures.erase(pictures.begin() + i, pictures.begin() + j);
+		endRemoveRows();
+	}
+	emit picturesRemoved(fileUrls);
+}
+
+int DivePictureModel::rowCount(const QModelIndex&) const
+{
+	return pictures.count();
+}
+
+int DivePictureModel::findPictureId(const QString &filename)
+{
+	for (int i = 0; i < pictures.size(); ++i)
+		if (pictures[i].filename == filename)
+			return i;
+	return -1;
+}
+
+void DivePictureModel::updateThumbnail(QString filename, QImage thumbnail)
+{
+	int i = findPictureId(filename);
+	if (i >= 0) {
+		pictures[i].image = thumbnail;
+		emit dataChanged(createIndex(i, 0), createIndex(i, 1));
 	}
 }
 
-int DivePictureModel::rowCount(const QModelIndex &parent) const
+void DivePictureModel::updateDivePictureOffset(int diveId, const QString &filename, int offsetSeconds)
 {
-	Q_UNUSED(parent);
-	return numberOfPictures;
+	// Find the pictures of the given dive.
+	auto from = std::find_if(pictures.begin(), pictures.end(), [diveId](const PictureEntry &e) { return e.diveId == diveId; });
+	auto to = std::find_if(from, pictures.end(), [diveId](const PictureEntry &e) { return e.diveId != diveId; });
+
+	// Find picture with the given filename
+	auto oldPos = std::find_if(from, to, [filename](const PictureEntry &e) { return e.filename == filename; });
+	if (oldPos == to)
+		return;
+
+	// Find new position
+	auto newPos = std::find_if(from, to, [offsetSeconds](const PictureEntry &e) { return e.offsetSeconds > offsetSeconds; });
+
+	// Update the offset here and in the backend
+	oldPos->offsetSeconds = offsetSeconds;
+	if (struct dive *dive = get_dive_by_uniq_id(diveId)) {
+		FOR_EACH_PICTURE(dive) {
+			if (picture->filename == filename) {
+				picture->offset.seconds = offsetSeconds;
+				mark_divelist_changed(true);
+				break;
+			}
+		}
+		copy_dive(current_dive, &displayed_dive);
+	}
+
+	// Henceforth we will work with indices instead of iterators
+	int oldIndex = oldPos - pictures.begin();
+	int newIndex = newPos - pictures.begin();
+	if (oldIndex == newIndex || oldIndex + 1 == newIndex)
+		return;
+	beginMoveRows(QModelIndex(), oldIndex, oldIndex, QModelIndex(), newIndex);
+	moveInVector(pictures, oldIndex, oldIndex + 1, newIndex);
+	endMoveRows();
 }

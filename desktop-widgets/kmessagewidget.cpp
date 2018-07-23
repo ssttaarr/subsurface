@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1+
 /* This file is part of the KDE libraries
  *
  * Copyright (c) 2011 Aurélien Gâteau <agateau@kde.org>
@@ -30,6 +31,7 @@
 #include <QTimeLine>
 #include <QToolButton>
 #include <QStyle>
+#include <cmath>
 
 //---------------------------------------------------------------------
 // KMessageWidgetPrivate
@@ -177,8 +179,8 @@ void KMessageWidgetPrivate::updateSnapShot()
 
 void KMessageWidgetPrivate::slotTimeLineChanged(qreal value)
 {
-    q->setFixedHeight(qMin(value * 2, qreal(1.0)) * content->height());
-    q->update();
+	q->setFixedHeight(lrint(qMin(value * 2, qreal(1.0)) * content->height()));
+	q->update();
 }
 
 void KMessageWidgetPrivate::slotTimeLineFinished()

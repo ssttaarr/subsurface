@@ -15,7 +15,7 @@
   </property>
   <property name="windowIcon">
    <iconset>
-    <normalon>:/subsurface-icon</normalon>
+    <normalon>:subsurface-icon</normalon>
    </iconset>
   </property>
   <layout class="QVBoxLayout" name="verticalLayout_3">
@@ -186,6 +186,13 @@
         <widget class="QProgressBar" name="progressBar">
          <property name="value">
           <number>0</number>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="progressText">
+         <property name="text">
+          <string/>
          </property>
         </widget>
        </item>

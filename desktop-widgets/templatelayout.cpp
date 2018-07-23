@@ -1,7 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0
+#include <QFileDevice>
 #include <string>
 
 #include "templatelayout.h"
-#include "core/helpers.h"
 #include "core/display.h"
 
 QList<QString> grantlee_templates, grantlee_statistics_templates;
@@ -11,30 +12,81 @@ int getTotalWork(print_options *printOptions)
 	if (printOptions->print_selected) {
 		// return the correct number depending on all/selected dives
 		// but don't return 0 as we might divide by this number
-		return amount_selected ? amount_selected : 1;
+		return amount_selected && !in_planner() ? amount_selected : 1;
 	}
 	return dive_table.nr;
 }
 
 void find_all_templates()
 {
+	const QString ext(".html");
 	grantlee_templates.clear();
 	grantlee_statistics_templates.clear();
 	QDir dir(getPrintingTemplatePathUser());
 	QStringList list = dir.entryList(QDir::Files | QDir::NoDotAndDotDot);
 	foreach (const QString& filename, list) {
-		if (filename.at(filename.size() - 1) != '~') {
+		if (filename.at(filename.size() - 1) != '~' && filename.endsWith(ext))
 			grantlee_templates.append(filename);
-		}
 	}
 
 	// find statistics templates
 	dir.setPath(getPrintingTemplatePathUser() + QDir::separator() + "statistics");
 	list = dir.entryList(QDir::Files | QDir::NoDotAndDotDot);
 	foreach (const QString& filename, list) {
-		if (filename.at(filename.size() - 1) != '~') {
+		if (filename.at(filename.size() - 1) != '~' && filename.endsWith(ext))
 			grantlee_statistics_templates.append(filename);
+	}
+}
+
+/* find templates which are part of the bundle in the user path
+ * and set them as read only.
+ */
+void set_bundled_templates_as_read_only()
+{
+	QDir dir;
+	const QString stats("statistics");
+	QStringList list, listStats;
+	QString pathBundle = getPrintingTemplatePathBundle();
+	QString pathUser = getPrintingTemplatePathUser();
+
+	dir.setPath(pathBundle);
+	list = dir.entryList(QDir::Files | QDir::NoDotAndDotDot);
+	dir.setPath(pathBundle + QDir::separator() + stats);
+	listStats = dir.entryList(QDir::Files | QDir::NoDotAndDotDot);
+	for (int i = 0; i < listStats.length(); i++)
+		listStats[i] = stats + QDir::separator() + listStats.at(i);
+	list += listStats;
+
+	foreach (const QString& f, list)
+		QFile::setPermissions(pathUser + QDir::separator() + f, QFileDevice::ReadOwner | QFileDevice::ReadUser);
+}
+
+void copy_bundled_templates(QString src, QString dst, QStringList *templateBackupList)
+{
+	QDir dir(src);
+	if (!dir.exists())
+		return;
+	foreach (QString d, dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+		QString dst_path = dst + QDir::separator() + d;
+		dir.mkpath(dst_path);
+		copy_bundled_templates(src + QDir::separator() + d, dst_path, templateBackupList);
+	}
+	foreach (QString f, dir.entryList(QDir::Files)) {
+		QFile fileSrc(src + QDir::separator() + f);
+		QFile fileDest(dst + QDir::separator() + f);
+		if (fileDest.exists()) {
+			// if open() fails the file is either locked or r/o. try to remove it and then overwrite
+			if (!fileDest.open(QFile::ReadWrite | QFile::Text)) {
+				fileDest.setPermissions(QFileDevice::WriteOwner | QFileDevice::WriteUser);
+				fileDest.remove();
+			} else { // if the file is not read-only create a backup
+				fileDest.close();
+				const QString targetFile = fileDest.fileName().replace(".html", "-User.html");
+				fileDest.copy(targetFile);
+				*templateBackupList << targetFile;
+			}
 		}
+		fileSrc.copy(fileDest.fileName()); // in all cases copy the file
 	}
 }
 
@@ -97,15 +149,21 @@ QString TemplateLayout::generate()
 	QVariantList diveList;
 
 	struct dive *dive;
-	int i;
-	for_each_dive (i, dive) {
-		//TODO check for exporting selected dives only
-		if (!dive->selected && PrintOptions->print_selected)
-			continue;
-		DiveObjectHelper *d = new DiveObjectHelper(dive);
+	if (in_planner()) {
+		DiveObjectHelper *d = new DiveObjectHelper(&displayed_dive);
 		diveList.append(QVariant::fromValue(d));
-		progress++;
-		emit progressUpdated(progress * 100.0 / totalWork);
+		emit progressUpdated(100.0);
+	} else {
+		int i;
+		for_each_dive (i, dive) {
+			//TODO check for exporting selected dives only
+			if (!dive->selected && PrintOptions->print_selected)
+				continue;
+			DiveObjectHelper *d = new DiveObjectHelper(dive);
+			diveList.append(QVariant::fromValue(d));
+			progress++;
+			emit progressUpdated(lrint(progress * 100.0 / totalWork));
+		}
 	}
 	Grantlee::Context c;
 	c.insert("dives", diveList);
@@ -191,7 +249,7 @@ void TemplateLayout::writeTemplate(QString template_name, QString grantlee_templ
 {
 	QFile qfile(getPrintingTemplatePathUser() + QDir::separator() + template_name);
 	if (qfile.open(QFile::ReadWrite | QFile::Text)) {
-		qfile.write(grantlee_template.toUtf8().data());
+		qfile.write(qPrintable(grantlee_template));
 		qfile.resize(qfile.pos());
 		qfile.close();
 	}
@@ -199,7 +257,7 @@ void TemplateLayout::writeTemplate(QString template_name, QString grantlee_templ
 
 YearInfo::YearInfo()
 {
-
+	year = Q_NULLPTR;
 }
 
 YearInfo::~YearInfo()

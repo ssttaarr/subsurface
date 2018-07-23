@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #ifndef SUBSURFACEWEBSERVICES_H
 #define SUBSURFACEWEBSERVICES_H
 
@@ -108,14 +109,5 @@ slots:
 	virtual void startUpload() { }
 	virtual void buttonClicked(QAbstractButton *button) { Q_UNUSED(button) }
 };
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-extern void set_save_userid_local(short value);
-extern void set_userid(char *user_id);
-#ifdef __cplusplus
-}
-#endif
 
 #endif // SUBSURFACEWEBSERVICES_H

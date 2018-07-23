@@ -1,9 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0
 #ifndef UNDOCOMMANDS_H
 #define UNDOCOMMANDS_H
 
 #include <QUndoCommand>
 #include <QMap>
-#include "core/dive.h"
 
 class UndoDeleteDive : public QUndoCommand {
 public:
@@ -45,6 +45,7 @@ public:
 
 private:
 	QMap<struct dive*, dive_trip*> divesToUndo;
+	QList<struct dive_trip*> tripList;
 };
 
 #endif // UNDOCOMMANDS_H

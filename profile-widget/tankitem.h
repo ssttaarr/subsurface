@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #ifndef TANKITEM_H
 #define TANKITEM_H
 
@@ -27,7 +28,6 @@ private:
 	void createBar(qreal x, qreal w, struct gasmix *gas);
 	DivePlotDataModel *dataModel;
 	DiveCartesianAxis *hAxis;
-	int hDataColumn;
 	struct dive diveCylinderStore;
 	struct plot_data *pInfoEntry;
 	int pInfoNr;

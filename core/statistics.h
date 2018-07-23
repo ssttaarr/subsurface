@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * statistics.h
  *
@@ -7,6 +8,9 @@
 
 #ifndef STATISTICS_H
 #define STATISTICS_H
+
+#include "core/units.h"
+#include "core/dive.h"	// For MAX_CYLINDERS
 
 #ifdef __cplusplus
 extern "C" {
@@ -27,12 +31,12 @@ typedef struct
 	volume_t max_sac;
 	volume_t min_sac;
 	volume_t avg_sac;
-	int max_temp;
-	int min_temp;
-	double combined_temp;
+	temperature_t max_temp;
+	temperature_t min_temp;
+	temperature_sum_t combined_temp;
 	unsigned int combined_count;
 	unsigned int selection_size;
-	unsigned int total_sac_time;
+	duration_t total_sac_time;
 	bool is_year;
 	bool is_trip;
 	char *location;
@@ -43,17 +47,12 @@ extern stats_t *stats_monthly;
 extern stats_t *stats_by_trip;
 extern stats_t *stats_by_type;
 
-extern char *get_time_string_s(int seconds, int maxdays, bool freediving);
 extern char *get_minutes(int seconds);
 extern void process_all_dives(struct dive *dive, struct dive **prev_dive);
-extern void get_selected_dives_text(char *buffer, size_t size);
 extern void get_gas_used(struct dive *dive, volume_t gases[MAX_CYLINDERS]);
 extern void process_selected_dives(void);
 void selected_dives_gas_parts(volume_t *o2_tot, volume_t *he_tot);
 
-inline char *get_time_string(int seconds, int maxdays) {
-	return get_time_string_s( seconds,  maxdays, false);
-}
 #ifdef __cplusplus
 }
 #endif

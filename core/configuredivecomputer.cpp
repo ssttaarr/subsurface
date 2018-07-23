@@ -1,5 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "configuredivecomputer.h"
-#include "libdivecomputer/hw.h"
 #include <QTextStream>
 #include <QFile>
 #include <libxml/parser.h>
@@ -8,6 +8,7 @@
 #include <libxslt/transform.h>
 #include <QStringList>
 #include <QXmlStreamWriter>
+#include "core/version.h"
 
 ConfigureDiveComputer::ConfigureDiveComputer() : readThread(0),
 	writeThread(0),
@@ -131,8 +132,8 @@ bool ConfigureDiveComputer::saveXMLBackup(QString fileName, DeviceDetails *detai
 	writer.writeTextElement("Dil3", dil3);
 	writer.writeTextElement("Dil4", dil4);
 	writer.writeTextElement("Dil5", dil5);
-	//
-	//Add set point values
+
+	//Add setpoint values
 	QString sp1 = QString("%1,%2")
 			      .arg(QString::number(details->sp1.sp),
 				   QString::number(details->sp1.depth));
@@ -630,26 +631,16 @@ QString ConfigureDiveComputer::dc_open(device_data_t *data)
 	if (fp) {
 		dc_context_set_loglevel(data->context, DC_LOGLEVEL_ALL);
 		dc_context_set_logfunc(data->context, logfunc, fp);
+		fprintf(data->libdc_logfile, "Subsurface: v%s, ", subsurface_git_version());
+		fprintf(data->libdc_logfile, "built with libdivecomputer v%s\n", dc_version(NULL));
 	}
 
-#if defined(SSRF_CUSTOM_SERIAL)
-	if (data->bluetooth_mode) {
-#if defined(BT_SUPPORT) && defined(SSRF_CUSTOM_SERIAL)
-		rc = dc_context_set_custom_serial(data->context, get_qt_serial_ops());
-#endif
-#ifdef SERIAL_FTDI
-	} else if (!strcmp(data->devname, "ftdi")) {
-		rc = dc_context_set_custom_serial(data->context, &serial_ftdi_ops);
-#endif
-	}
+	rc = divecomputer_device_open(data);
 
 	if (rc != DC_STATUS_SUCCESS) {
 		report_error(errmsg(rc));
 	} else {
-#else
-	{
-#endif
-		rc = dc_device_open(&data->device, data->context, data->descriptor, data->devname);
+		rc = dc_device_open(&data->device, data->context, data->descriptor, data->iostream);
 	}
 
 	if (rc != DC_STATUS_SUCCESS) {
@@ -669,6 +660,8 @@ void ConfigureDiveComputer::dc_close(device_data_t *data)
 	if (data->context)
 		dc_context_free(data->context);
 	data->context = NULL;
+	dc_iostream_close(data->iostream);
+	data->iostream = NULL;
 
 	if (data->libdc_logfile)
 		fclose(data->libdc_logfile);

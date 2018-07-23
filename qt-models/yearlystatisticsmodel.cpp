@@ -1,6 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "qt-models/yearlystatisticsmodel.h"
-#include "core/dive.h"
-#include "core/helpers.h"
+#include "core/qthelper.h"
 #include "core/metrics.h"
 #include "core/statistics.h"
 
@@ -38,7 +38,6 @@ YearStatisticsItem::YearStatisticsItem(stats_t interval) : stats_interval(interv
 
 QVariant YearStatisticsItem::data(int column, int role) const
 {
-	double value;
 	QVariant ret;
 
 	if (role == Qt::FontRole) {
@@ -60,7 +59,7 @@ QVariant YearStatisticsItem::data(int column, int role) const
 		ret = stats_interval.selection_size;
 		break;
 	case TOTAL_TIME:
-		ret = get_time_string(stats_interval.total_time.seconds, 0);
+		ret = get_dive_duration_string(stats_interval.total_time.seconds, tr("h"), tr("min"), tr("sec"), " ");
 		break;
 	case AVERAGE_TIME:
 		ret = get_minutes(stats_interval.total_time.seconds / stats_interval.selection_size);
@@ -90,19 +89,19 @@ QVariant YearStatisticsItem::data(int column, int role) const
 		ret = get_volume_string(stats_interval.max_sac);
 		break;
 	case AVG_TEMP:
-		if (stats_interval.combined_temp && stats_interval.combined_count) {
-			ret = QString::number(stats_interval.combined_temp / stats_interval.combined_count, 'f', 1);
+		if (stats_interval.combined_temp.mkelvin && stats_interval.combined_count) {
+			temperature_t avg_temp;
+			avg_temp.mkelvin = stats_interval.combined_temp.mkelvin / stats_interval.combined_count;
+			ret = get_temperature_string(avg_temp);
 		}
 		break;
 	case MIN_TEMP:
-		value = get_temp_units(stats_interval.min_temp, NULL);
-		if (value > -100.0)
-			ret = QString::number(value, 'f', 1);
+		if (stats_interval.min_temp.mkelvin)
+			ret = get_temperature_string(stats_interval.min_temp);
 		break;
 	case MAX_TEMP:
-		value = get_temp_units(stats_interval.max_temp, NULL);
-		if (value > -100.0)
-			ret = QString::number(value, 'f', 1);
+		if (stats_interval.max_temp.mkelvin)
+			ret = get_temperature_string(stats_interval.max_temp);
 		break;
 	}
 	return ret;
@@ -206,7 +205,7 @@ void YearlyStatisticsModel::update_yearly_stats()
 	/* Show the statistic sorted by dive type */
 	if (stats_by_type != NULL && stats_by_type[0].selection_size) {
 		YearStatisticsItem *item = new YearStatisticsItem(stats_by_type[0]);
-		for (i = 1; i <= NUM_DC_TYPE; ++i) {
+		for (i = 1; i <= NUM_DIVEMODE; ++i) {
 			if (stats_by_type[i].selection_size == 0)
 				continue;
 			YearStatisticsItem *iChild = new YearStatisticsItem(stats_by_type[i]);

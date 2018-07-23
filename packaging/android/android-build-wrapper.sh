@@ -2,25 +2,35 @@
 
 # run this in the top level folder you want to create Android binaries in
 #
-# it seems that with Qt5.7.1 and current cmake there is an odd bug where
+# it seems that with Qt5.7 (and later) and current cmake there is an odd bug where
 # cmake fails reporting :No known features for CXX compiler "GNU". In that
 # case simly comment out the "set(property(TARGET Qt5::Core PROPERTY...)"
 # at line 101 of
 # Qt/5.7/android_armv7/lib/cmake/Qt5Core/Qt5CoreConfigExtras.cmake
+# or at line 95 of
+# Qt/5.8/android_armv7/lib/cmake/Qt5Core/Qt5CoreConfigExtras.cmake
+# or at line 105 of
+# Qt/5.9/android_armv7/lib/cmake/Qt5Core/Qt5CoreConfigExtras.cmake
+# (this script tries to do this automatically)
 
 exec 1> >(tee ./build.log) 2>&1
 
 USE_X=$(case $- in *x*) echo "-x" ;; esac)
 
 # these are the current versions for Qt, Android SDK & NDK:
+source subsurface/packaging/android/variables.sh
 
-QT_VERSION=5.8
-LATEST_QT=5.8.0
-NDK_VERSION=r13b
-SDK_VERSION=r25.2.3
-
-ANDROID_NDK=android-ndk-${NDK_VERSION}
-ANDROID_SDK=android-sdk-linux
+# avoid timeouts on Travis when downloads take a long time
+SLOW_PROG=""
+if [ -n "${TRAVIS:-}" ]; then
+	source subsurface/scripts/travis-wait.sh
+	set -x # make debugging Travis easier
+	SLOW_PROG="travis_wait"
+	# since we are running on Travis, let's just get our minimal Qt install
+	mkdir -p Qt/"${LATEST_QT}"
+	$SLOW_PROG wget -q https://storage.googleapis.com/travis-cache/Qt-"${LATEST_QT}"-android.tar.xz
+	tar -xJ -C Qt/"${LATEST_QT}" -f Qt-"${LATEST_QT}"-android.tar.xz
+fi
 
 PLATFORM=$(uname)
 
@@ -29,9 +39,9 @@ export SUBSURFACE_SOURCE=$PWD
 popd
 
 if [ "$PLATFORM" = Linux ] ; then
-	QT_BINARIES=qt-opensource-linux-x64-android-${LATEST_QT}.run
+	QT_BINARIES=qt-opensource-linux-x64-${LATEST_QT}.run
 	NDK_BINARIES=${ANDROID_NDK}-linux-x86_64.zip
-	SDK_TOOLS=tools_${SDK_VERSION}-linux.zip
+	SDK_TOOLS=sdk-tools-linux-${SDK_VERSION}.zip
 else
 	echo "only on Linux so far"
 	exit 1
@@ -39,7 +49,7 @@ fi
 
 # make sure we have the required commands installed
 MISSING=
-for i in git cmake autoconf libtool java ant wget unzip; do
+for i in git cmake autoconf libtool java wget unzip; do
 	command -v $i >/dev/null ||
 		if [ $i = libtool ] ; then
 			MISSING="${MISSING}libtool-bin "
@@ -55,61 +65,64 @@ if [ "$MISSING" ] ; then
 	exit 1
 fi
 
+# first we need to get the Android SDK and NDK
+if [ ! -d "$ANDROID_NDK" ] ; then
+	if [ ! -f "$NDK_BINARIES" ] ; then
+		$SLOW_PROG wget -q https://dl.google.com/android/repository/"$NDK_BINARIES"
+	fi
+	unzip -q "$NDK_BINARIES"
+fi
+
+if [ ! -d "$ANDROID_SDK"/build-tools/"${ANDROID_BUILDTOOLS_REVISION}" ] ; then
+	if [ ! -d "$ANDROID_SDK" ] ; then
+		if [ ! -f "$SDK_TOOLS" ] ; then
+			$SLOW_PROG wget -q https://dl.google.com/android/repository/"$SDK_TOOLS"
+		fi
+		mkdir "$ANDROID_SDK"
+		pushd "$ANDROID_SDK"
+		unzip -q ../"$SDK_TOOLS"
+		yes | tools/bin/sdkmanager --licenses > /dev/null 2>&1 || echo "d56f5187479451eabf01fb78af6dfcb131a6481e" > licenses/android-sdk-license
+		cat licenses/android-sdk-license
+		echo ""
+	else
+		pushd "$ANDROID_SDK"
+		tools/bin/sdkmanager tools platform-tools 'platforms;'"${ANDROID_PLATFORMS}" 'build-tools;'"${ANDROID_BUILDTOOLS_REVISION}"
+	fi
+	popd
+fi
+
 # download the Qt installer including Android bits and unpack / install
 QT_DOWNLOAD_URL=https://download.qt.io/archive/qt/${QT_VERSION}/${LATEST_QT}/${QT_BINARIES}
-if [ ! -d Qt ] ; then
-	if [ ! -f ${QT_BINARIES} ] ; then
-		wget -q ${QT_DOWNLOAD_URL}
+if [ ! -d Qt/"${LATEST_QT}"/android_armv7 ] ; then
+	if [ -d Qt ] ; then
+		# Over writing an exsisting installation stalls the installation script,
+		# rename the exsisting Qt folder and notify then user.
+		mv Qt Qt_OLD
+		echo "Qt installation found, backing it up to Qt_OLD."
 	fi
-	chmod +x ./${QT_BINARIES}
-	./${QT_BINARIES} -platform minimal --script "$SUBSURFACE_SOURCE"/qt-installer-noninteractive.qs --no-force-installations
+	if [ ! -f "${QT_BINARIES}" ] ; then
+		$SLOW_PROG wget -q "${QT_DOWNLOAD_URL}"
+	fi
+	chmod +x ./"${QT_BINARIES}"
+	./"${QT_BINARIES}" --platform minimal --script "$SUBSURFACE_SOURCE"/qt-installer-noninteractive.qs --no-force-installations
 fi
 
 # patch the cmake / Qt5.7.1 incompatibility mentioned above
-sed -i 's/set_property(TARGET Qt5::Core PROPERTY INTERFACE_COMPILE_FEATURES cxx_decltype)/# set_property(TARGET Qt5::Core PROPERTY INTERFACE_COMPILE_FEATURES cxx_decltype)/' Qt/${QT_VERSION}/android_armv7/lib/cmake/Qt5Core/Qt5CoreConfigExtras.cmake
+sed -i 's/set_property(TARGET Qt5::Core PROPERTY INTERFACE_COMPILE_FEATURES cxx_decltype)/# set_property(TARGET Qt5::Core PROPERTY INTERFACE_COMPILE_FEATURES cxx_decltype)/' Qt/"${LATEST_QT}"/android_armv7/lib/cmake/Qt5Core/Qt5CoreConfigExtras.cmake
 
-# next we need to get the Android SDK and NDK
-if [ ! -d $ANDROID_NDK ] ; then
-	if [ ! -f $NDK_BINARIES ] ; then
-		wget -q https://dl.google.com/android/repository/$NDK_BINARIES
-	fi
-	unzip -q $NDK_BINARIES
-fi
-
-if [ ! -d $ANDROID_SDK ] ; then
-	if [ ! -f $SDK_TOOLS ] ; then
-		wget -q https://dl.google.com/android/repository/$SDK_TOOLS
-	fi
-	mkdir $ANDROID_SDK
-	pushd $ANDROID_SDK
-	unzip -q ../$SDK_TOOLS
-	( sleep 5 && while true ; do sleep 1; echo y; done ) | bash tools/android update sdk --no-ui -a -t 1,2,3,33
+if [ ! -d subsurface/libdivecomputer/src ] ; then
+	pushd subsurface
+	git submodule init
+	git submodule update --recursive
 	popd
 fi
 
-# ok, now we have Qt, SDK, and NDK - let's get us some Subsurface
-if [ ! -d subsurface ] ; then
-	git clone git://github.com/Subsurface-divelog/subsurface
-fi
-pushd subsurface
-git pull --rebase
-popd
-
-if [ ! -d libdivecomputer ] ; then
-	git clone -b Subsurface-branch git://github.com/Subsurface-divelog/libdc libdivecomputer
-	pushd libdivecomputer
+if [ ! -f subsurface/libdivecomputer/configure ] ; then
+	pushd subsurface/libdivecomputer
 	autoreconf --install
 	autoreconf --install
 	popd
 fi
-pushd libdivecomputer
-git pull --rebase
-if ! git checkout Subsurface-branch ; then
-	echo "can't check out the Subsurface-branch branch of libdivecomputer -- giving up"
-	exit 1
-fi
-popd
-
 
 # and now we need a monotonic build number...
 if [ ! -f ./buildnr.dat ] ; then
@@ -117,26 +130,19 @@ if [ ! -f ./buildnr.dat ] ; then
 else
 	BUILDNR=$(cat ./buildnr.dat)
 fi
-((BUILDNR++))
+BUILDNR=$((BUILDNR+1))
 echo "${BUILDNR}" > ./buildnr.dat
 
-echo "Building Subsurface-mobile ${VERSION} for Android, build nr ${BUILDNR} as Subsurface-mobile-$VERSION-${NAME}arm.apk"
+echo "Building Subsurface-mobile for Android, build nr ${BUILDNR}"
 
-if [ "$1" = release ] || [ "$1" = Release ] || [ "$1" = debug ] || [ "$1" = Debug ] ; then
-	RELEASE=$1
-	shift
-else
-	RELEASE=Debug
-fi
+rm -f ./subsurface-mobile-build-arm/build/outputs/apk/*.apk
+rm -df ./subsurface-mobile-build-arm/AndroidManifest.xml
 
-rm -f ./subsurface-mobile-build-arm/bin/QtApp-debug.apk
-rm -d ./subsurface-mobile-build-arm/AndroidManifest.xml
-rm -d ./subsurface-mobile-build-arm/bin/AndroidManifest.xml
 if [ "$USE_X" ] ; then
-	bash "$USE_X" subsurface/packaging/android/build.sh "$RELEASE" -buildnr "$BUILDNR" arm "$@"
+	bash "$USE_X" "$SUBSURFACE_SOURCE"/packaging/android/build.sh -buildnr "$BUILDNR" arm "$@"
 else
-	bash subsurface/packaging/android/build.sh "$RELEASE" -buildnr "$BUILDNR" arm "$@"
+	bash "$SUBSURFACE_SOURCE"/packaging/android/build.sh -buildnr "$BUILDNR" arm "$@"
 fi
 
-ls -l ./subsurface-mobile-build-arm/bin/*.apk
+ls -l ./subsurface-mobile-build-arm/build/outputs/apk/*.apk
 

@@ -1,6 +1,7 @@
 <?xml version="1.0"?>
 <xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="1.0">
   <xsl:strip-space elements="*"/>
+  <xsl:include href="commonTemplates.xsl"/>
   <xsl:output method="xml" indent="yes"/>
 
   <xsl:template match="/">
@@ -30,6 +31,16 @@
   </xsl:template>
 
   <xsl:template match="DIVE|dive">
+    <xsl:variable name="units">
+      <xsl:choose>
+        <xsl:when test="translate(//units|//UNITS, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz') = 'imperial'">
+          <xsl:value-of select="'Imperial'"/>
+        </xsl:when>
+        <xsl:otherwise>
+          <xsl:value-of select="'Metric'"/>
+        </xsl:otherwise>
+      </xsl:choose>
+    </xsl:variable>
     <dive>
       <xsl:attribute name="date">
         <xsl:for-each select="DATE/YEAR|DATE/MONTH|DATE/DAY|date/year|date/month|date/day">
@@ -52,7 +63,12 @@
       <xsl:if test="TEMPERATURE|temperature != ''">
         <temperature>
           <xsl:attribute name="water">
-            <xsl:value-of select="concat(TEMPERATURE|temperature, ' C')"/>
+            <xsl:call-template name="tempConvert">
+              <xsl:with-param name="temp">
+                <xsl:value-of select="TEMPERATURE|temperature"/>
+              </xsl:with-param>
+              <xsl:with-param name="units" select="$units"/>
+            </xsl:call-template>
           </xsl:attribute>
         </temperature>
       </xsl:if>
@@ -69,13 +85,30 @@
             <xsl:value-of select="MIXNAME|mixname"/>
           </xsl:attribute>
           <xsl:attribute name="size">
-            <xsl:value-of select="concat(TANK/TANKVOLUME|tank/tankvolume, ' l')"/>
+            <xsl:choose>
+              <xsl:when test="$units = 'Imperial'">
+                <xsl:value-of select="concat(TANK/TANKVOLUME|tank/tankvolume div 7, ' l')"/>
+              </xsl:when>
+              <xsl:otherwise>
+                <xsl:value-of select="concat(TANK/TANKVOLUME|tank/tankvolume, ' l')"/>
+              </xsl:otherwise>
+            </xsl:choose>
           </xsl:attribute>
           <xsl:attribute name="start">
-            <xsl:value-of select="TANK/PSTART|tank/pstart"/>
+            <xsl:call-template name="pressureConvert">
+              <xsl:with-param name="number">
+                <xsl:value-of select="TANK/PSTART|tank/pstart"/>
+              </xsl:with-param>
+              <xsl:with-param name="units" select="$units"/>
+            </xsl:call-template>
           </xsl:attribute>
           <xsl:attribute name="end">
-            <xsl:value-of select="TANK/PEND|tank/pend"/>
+            <xsl:call-template name="pressureConvert">
+              <xsl:with-param name="number">
+                <xsl:value-of select="TANK/PEND|tank/pend"/>
+              </xsl:with-param>
+              <xsl:with-param name="units" select="$units"/>
+            </xsl:call-template>
           </xsl:attribute>
           <xsl:attribute name="o2">
             <xsl:value-of select="O2|o2"/>
@@ -125,7 +158,12 @@
 		  format-number(floor($timeSec mod $timeconvert), '00'), ' min')"/>
 	      </xsl:attribute>
 	      <xsl:attribute name="depth">
-		<xsl:value-of select="concat(., ' m')"/>
+                <xsl:call-template name="depthConvert">
+                  <xsl:with-param name="depth">
+                    <xsl:value-of select="."/>
+                  </xsl:with-param>
+                  <xsl:with-param name="units" select="$units"/>
+                </xsl:call-template>
 	      </xsl:attribute>
 	    </sample>
 	  </xsl:for-each>
@@ -161,7 +199,12 @@
 		  format-number(floor($timeSec mod 60), '00'), ' min')"/>
 	      </xsl:attribute>
 	      <xsl:attribute name="depth">
-		<xsl:value-of select="concat(., ' m')"/>
+                <xsl:call-template name="depthConvert">
+                  <xsl:with-param name="depth">
+                    <xsl:value-of select="."/>
+                  </xsl:with-param>
+                  <xsl:with-param name="units" select="$units"/>
+                </xsl:call-template>
 	      </xsl:attribute>
 	    </sample>
 	  </xsl:for-each>

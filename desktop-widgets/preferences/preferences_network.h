@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #ifndef PREFERENCES_NETWORK_H
 #define PREFERENCES_NETWORK_H
 
@@ -18,11 +19,11 @@ public:
 
 public slots:
 	void proxyType_changed(int i);
-	void cloudPinNeeded();
+	void updateCloudAuthenticationState();
+	void passwordUpdateSuccessful();
 
 private:
 	Ui::PreferencesNetwork *ui;
-	void passwordUpdateSuccessfull();
 };
 
 #endif

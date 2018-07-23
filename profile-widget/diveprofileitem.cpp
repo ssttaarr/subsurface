@@ -1,15 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "profile-widget/diveprofileitem.h"
 #include "qt-models/diveplotdatamodel.h"
 #include "profile-widget/divecartesianaxis.h"
 #include "profile-widget/divetextitem.h"
 #include "profile-widget/animationfunctions.h"
-#include "core/dive.h"
 #include "core/profile.h"
 #ifndef SUBSURFACE_MOBILE
 #include "desktop-widgets/preferences/preferencesdialog.h"
 #endif
 #include "qt-models/diveplannermodel.h"
-#include "core/helpers.h"
+#include "core/qthelper.h"
 #include "core/subsurface-qt/SettingsObjectWrapper.h"
 #include "libdivecomputer/parser.h"
 #include "profile-widget/profilewidget2.h"
@@ -52,11 +52,8 @@ void AbstractProfilePolygonItem::setModel(DivePlotDataModel *model)
 	modelDataChanged();
 }
 
-void AbstractProfilePolygonItem::modelDataRemoved(const QModelIndex &parent, int from, int to)
+void AbstractProfilePolygonItem::modelDataRemoved(const QModelIndex&, int, int)
 {
-	Q_UNUSED(from);
-	Q_UNUSED(parent);
-	Q_UNUSED(to);
 	setPolygon(QPolygonF());
 	qDeleteAll(texts);
 	texts.clear();
@@ -93,10 +90,8 @@ bool AbstractProfilePolygonItem::shouldCalculateStuff(const QModelIndex &topLeft
 	return true;
 }
 
-void AbstractProfilePolygonItem::modelDataChanged(const QModelIndex &topLeft, const QModelIndex &bottomRight)
+void AbstractProfilePolygonItem::modelDataChanged(const QModelIndex&, const QModelIndex&)
 {
-	Q_UNUSED(topLeft);
-	Q_UNUSED(bottomRight);
 	// Calculate the polygon. This is the polygon that will be painted on screen
 	// on the ::paint method. Here we calculate the correct position of the points
 	// regarting our cartesian plane ( made by the hAxis and vAxis ), the QPolygonF
@@ -121,15 +116,13 @@ DiveProfileItem::DiveProfileItem() : show_reported_ceiling(0), reported_ceiling_
 	connect(SettingsObjectWrapper::instance()->techDetails, &TechnicalDetailsSettings::redceilingChanged, this, &DiveProfileItem::settingsToggled);
 }
 
-void DiveProfileItem::settingsToggled(bool toggled)
+void DiveProfileItem::settingsToggled(bool)
 {
-	Q_UNUSED(toggled);
 	settingsChanged();
 }
 
 void DiveProfileItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget)
 {
-	Q_UNUSED(widget);
 	if (polygon().isEmpty())
 		return;
 
@@ -170,7 +163,6 @@ int DiveProfileItem::maxCeiling(int row)
 void DiveProfileItem::modelDataChanged(const QModelIndex &topLeft, const QModelIndex &bottomRight)
 {
 	bool eventAdded = false;
-	(void)eventAdded;
 	if (!shouldCalculateStuff(topLeft, bottomRight))
 		return;
 
@@ -182,7 +174,9 @@ void DiveProfileItem::modelDataChanged(const QModelIndex &topLeft, const QModelI
 	reported_ceiling_in_red = prefs.redceiling;
 	profileColor = getColor(DEPTH_BOTTOM);
 
-#ifndef SUBSURFACE_MOBILE
+#ifdef SUBSURFACE_MOBILE
+	Q_UNUSED(eventAdded);
+#else
 	int currState = qobject_cast<ProfileWidget2 *>(scene()->views().first())->currentState;
 	if (currState == ProfileWidget2::PLAN) {
 		plot_data *entry = dataModel->data().entry;
@@ -192,7 +186,8 @@ void DiveProfileItem::modelDataChanged(const QModelIndex &topLeft, const QModelI
 			if (entry->depth < max - 100 && entry->sec > 0) {
 				profileColor = QColor(Qt::red);
 				if (!eventAdded) {
-					add_event(&displayed_dive.dc, entry->sec, SAMPLE_EVENT_CEILING, -1, max / 1000, "planned waypoint above ceiling");
+					add_event(&displayed_dive.dc, entry->sec, SAMPLE_EVENT_CEILING, -1, max / 1000, 
+						QT_TRANSLATE_NOOP("gettextFromC", "planned waypoint above ceiling"));
 					eventAdded = true;
 				}
 			}
@@ -257,11 +252,9 @@ void DiveProfileItem::settingsChanged()
 
 void DiveProfileItem::plot_depth_sample(struct plot_data *entry, QFlags<Qt::AlignmentFlag> flags, const QColor &color)
 {
-	int decimals;
-	double d = get_depth_units(entry->depth, &decimals, NULL);
 	DiveTextItem *item = new DiveTextItem(this);
 	item->setPos(hAxis->posAtValue(entry->sec), vAxis->posAtValue(entry->depth));
-	item->setText(QString("%1").arg(d, 0, 'f', 1));
+	item->setText(get_depth_string(entry->depth, true));
 	item->setAlignment(flags);
 	item->setBrush(color);
 	texts.append(item);
@@ -291,7 +284,7 @@ void DiveHeartrateItem::modelDataChanged(const QModelIndex &topLeft, const QMode
 
 	qDeleteAll(texts);
 	texts.clear();
-	// Ignore empty values. a heartrate of 0 would be a bad sign.
+	// Ignore empty values. a heart rate of 0 would be a bad sign.
 	QPolygonF poly;
 	for (int i = 0, modelDataCount = dataModel->rowCount(); i < modelDataCount; i++) {
 		int hr = dataModel->index(i, vDataColumn).data().toInt();
@@ -343,10 +336,8 @@ void DiveHeartrateItem::createTextItem(int sec, int hr)
 	texts.append(text);
 }
 
-void DiveHeartrateItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget)
+void DiveHeartrateItem::paint(QPainter *painter, const QStyleOptionGraphicsItem*, QWidget*)
 {
-	Q_UNUSED(option);
-	Q_UNUSED(widget);
 	if (polygon().isEmpty())
 		return;
 	painter->save();
@@ -370,7 +361,7 @@ void DivePercentageItem::modelDataChanged(const QModelIndex &topLeft, const QMod
 	if (!shouldCalculateStuff(topLeft, bottomRight))
 		return;
 
-	// Ignore empty values. a heartrate of 0 would be a bad sign.
+	// Ignore empty values. a heart rate of 0 would be a bad sign.
 	QPolygonF poly;
 	for (int i = 0, modelDataCount = dataModel->rowCount(); i < modelDataCount; i++) {
 		sec = dataModel->index(i, hDataColumn).data().toInt();
@@ -407,11 +398,8 @@ QColor DivePercentageItem::ColorScale(double value, int inert)
 
 }
 
-void DivePercentageItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget)
+void DivePercentageItem::paint(QPainter *painter, const QStyleOptionGraphicsItem*, QWidget*)
 {
-	Q_UNUSED(option);
-	Q_UNUSED(widget);
-
 	if (polygon().isEmpty())
 		return;
 	painter->save();
@@ -422,8 +410,11 @@ void DivePercentageItem::paint(QPainter *painter, const QStyleOptionGraphicsItem
 	for (int i = 1, modelDataCount = dataModel->rowCount(); i < modelDataCount; i++) {
 		if (i < poly.count()) {
 			double value = dataModel->index(i, vDataColumn).data().toDouble();
-			int cyl = dataModel->index(i, DivePlotDataModel::CYLINDERINDEX).data().toInt();
-			int inert = 1000 - get_o2(&displayed_dive.cylinder[cyl].gasmix);
+			struct gasmix *gasmix = NULL;
+			struct event *ev = NULL;
+			int sec = dataModel->index(i, DivePlotDataModel::TIME).data().toInt();
+			gasmix = get_gasmix(&displayed_dive, displayed_dc, sec, &ev, gasmix);
+			int inert = 1000 - get_o2(gasmix);
 			mypen.setBrush(QBrush(ColorScale(value, inert)));
 			painter->setPen(mypen);
 			painter->drawLine(poly[i - 1], poly[i]);
@@ -450,7 +441,7 @@ void DiveAmbPressureItem::modelDataChanged(const QModelIndex &topLeft, const QMo
 	if (!shouldCalculateStuff(topLeft, bottomRight))
 		return;
 
-	// Ignore empty values. a heartrate of 0 would be a bad sign.
+	// Ignore empty values. a heart rate of 0 would be a bad sign.
 	QPolygonF poly;
 	for (int i = 0, modelDataCount = dataModel->rowCount(); i < modelDataCount; i++) {
 		int hr = dataModel->index(i, vDataColumn).data().toInt();
@@ -466,11 +457,8 @@ void DiveAmbPressureItem::modelDataChanged(const QModelIndex &topLeft, const QMo
 		texts.last()->setAlignment(Qt::AlignLeft | Qt::AlignBottom);
 }
 
-void DiveAmbPressureItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget)
+void DiveAmbPressureItem::paint(QPainter *painter, const QStyleOptionGraphicsItem*, QWidget*)
 {
-	Q_UNUSED(option);
-	Q_UNUSED(widget);
-
 	if (polygon().isEmpty())
 		return;
 	painter->save();
@@ -498,7 +486,7 @@ void DiveGFLineItem::modelDataChanged(const QModelIndex &topLeft, const QModelIn
 	if (!shouldCalculateStuff(topLeft, bottomRight))
 		return;
 
-	// Ignore empty values. a heartrate of 0 would be a bad sign.
+	// Ignore empty values. a heart rate of 0 would be a bad sign.
 	QPolygonF poly;
 	for (int i = 0, modelDataCount = dataModel->rowCount(); i < modelDataCount; i++) {
 		int hr = dataModel->index(i, vDataColumn).data().toInt();
@@ -514,11 +502,8 @@ void DiveGFLineItem::modelDataChanged(const QModelIndex &topLeft, const QModelIn
 		texts.last()->setAlignment(Qt::AlignLeft | Qt::AlignBottom);
 }
 
-void DiveGFLineItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget)
+void DiveGFLineItem::paint(QPainter *painter, const QStyleOptionGraphicsItem*, QWidget*)
 {
-	Q_UNUSED(option);
-	Q_UNUSED(widget);
-
 	if (polygon().isEmpty())
 		return;
 	painter->save();
@@ -585,24 +570,20 @@ void DiveTemperatureItem::modelDataChanged(const QModelIndex &topLeft, const QMo
 
 void DiveTemperatureItem::createTextItem(int sec, int mkelvin)
 {
-	double deg;
-	const char *unit;
-	deg = get_temp_units(mkelvin, &unit);
+	temperature_t temp;
+	temp.mkelvin = mkelvin;
 
 	DiveTextItem *text = new DiveTextItem(this);
 	text->setAlignment(Qt::AlignRight | Qt::AlignBottom);
 	text->setBrush(getColor(TEMP_TEXT));
 	text->setPos(QPointF(hAxis->posAtValue(sec), vAxis->posAtValue(mkelvin)));
 	text->setScale(0.8); // need to call this BEFORE setText()
-	text->setText(QString("%1%2").arg(deg, 0, 'f', 1).arg(unit));
+	text->setText(get_temperature_string(temp, true));
 	texts.append(text);
 }
 
-void DiveTemperatureItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget)
+void DiveTemperatureItem::paint(QPainter *painter, const QStyleOptionGraphicsItem*, QWidget*)
 {
-	Q_UNUSED(option);
-	Q_UNUSED(widget);
-
 	if (polygon().isEmpty())
 		return;
 	painter->save();
@@ -618,6 +599,7 @@ DiveMeanDepthItem::DiveMeanDepthItem()
 	pen.setCosmetic(true);
 	pen.setWidth(2);
 	setPen(pen);
+	lastRunningSum = 0.0;
 	settingsChanged();
 }
 
@@ -645,11 +627,8 @@ void DiveMeanDepthItem::modelDataChanged(const QModelIndex &topLeft, const QMode
 }
 
 
-void DiveMeanDepthItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget)
+void DiveMeanDepthItem::paint(QPainter *painter, const QStyleOptionGraphicsItem*, QWidget*)
 {
-	Q_UNUSED(option);
-	Q_UNUSED(widget);
-
 	if (polygon().isEmpty())
 		return;
 	painter->save();
@@ -664,15 +643,12 @@ void DiveMeanDepthItem::createTextItem() {
 	int sec = entry[dataModel->rowCount()-1].sec;
 	qDeleteAll(texts);
 	texts.clear();
-	int decimals;
-	const char *unitText;
-	double d = get_depth_units(lastRunningSum, &decimals, &unitText);
 	DiveTextItem *text = new DiveTextItem(this);
 	text->setAlignment(Qt::AlignRight | Qt::AlignTop);
 	text->setBrush(getColor(TEMP_TEXT));
 	text->setPos(QPointF(hAxis->posAtValue(sec) + 1, vAxis->posAtValue(lastRunningSum)));
 	text->setScale(0.8); // need to call this BEFORE setText()
-	text->setText(QString("%1%2").arg(d, 0, 'f', 1).arg(unitText));
+	text->setText(get_depth_string(lrint(lastRunningSum), true));
 	texts.append(text);
 }
 
@@ -681,112 +657,112 @@ void DiveGasPressureItem::modelDataChanged(const QModelIndex &topLeft, const QMo
 	// We don't have enougth data to calculate things, quit.
 	if (!shouldCalculateStuff(topLeft, bottomRight))
 		return;
-	int last_index = -1;
-	int o2mbar;
-	QPolygonF boundingPoly, o2Poly; // This is the "Whole Item", but a pressure can be divided in N Polygons.
+
+	int plotted_cyl[MAX_CYLINDERS] = { false, };
+	int last_plotted[MAX_CYLINDERS] = { 0, };
+	QPolygonF poly[MAX_CYLINDERS];
+	QPolygonF boundingPoly;
 	polygons.clear();
-	if (displayed_dive.dc.divemode == CCR)
-		polygons.append(o2Poly);
 
 	for (int i = 0, count = dataModel->rowCount(); i < count; i++) {
-		o2mbar = 0;
-		plot_data *entry = dataModel->data().entry + i;
-		int mbar = GET_PRESSURE(entry);
-		if (displayed_dive.dc.divemode == CCR)
-			o2mbar = GET_O2CYLINDER_PRESSURE(entry);
+		struct plot_data *entry = dataModel->data().entry + i;
 
-		if ((int)entry->cylinderindex != last_index) {
-			polygons.append(QPolygonF()); // this is the polygon that will be actually drawn on screen.
-			last_index = entry->cylinderindex;
-		}
-		if (!mbar) {
-			continue;
-		}
-		if (o2mbar) {
-			QPointF o2point(hAxis->posAtValue(entry->sec), vAxis->posAtValue(o2mbar));
-			boundingPoly.push_back(o2point);
-			polygons.first().push_back(o2point);
-		}
+		for (int cyl = 0; cyl < MAX_CYLINDERS; cyl++) {
+			int mbar = GET_PRESSURE(entry, cyl);
+			int time = entry->sec;
 
-		QPointF point(hAxis->posAtValue(entry->sec), vAxis->posAtValue(mbar));
-		boundingPoly.push_back(point);    // The BoundingRect
-		polygons.last().push_back(point); // The polygon thta will be plotted.
+			if (!mbar)
+				continue;
+
+			QPointF point(hAxis->posAtValue(time), vAxis->posAtValue(mbar));
+			boundingPoly.push_back(point);
+
+			if (plotted_cyl[cyl]) {
+				/* Have we used this culinder in the last two minutes? Continue */
+				if (time - last_plotted[cyl] <= 2*60) {
+					poly[cyl].push_back(point);
+					last_plotted[cyl] = time;
+					continue;
+				}
+
+				/* Finish the previous one, start a new one */
+				polygons.append(poly[cyl]);
+				poly[cyl] = QPolygonF();
+			}
+
+			plotted_cyl[cyl] = true;
+			last_plotted[cyl] = time;
+			poly[cyl].push_back(point);
+		}
 	}
+
+	for (int cyl = 0; cyl < MAX_CYLINDERS; cyl++) {
+		if (!plotted_cyl[cyl])
+			continue;
+		polygons.append(poly[cyl]);
+	}
+
 	setPolygon(boundingPoly);
 	qDeleteAll(texts);
 	texts.clear();
-	int mbar, cyl;
+
 	int seen_cyl[MAX_CYLINDERS] = { false, };
 	int last_pressure[MAX_CYLINDERS] = { 0, };
 	int last_time[MAX_CYLINDERS] = { 0, };
-	struct plot_data *entry;
 
-	cyl = -1;
-	o2mbar = 0;
+	// These are offset values used to print the gas lables and pressures on a
+	// dive profile at appropriate Y-coordinates. We alternate aligning the
+	// label and the gas pressure above and under the pressure line.
+	// The values are historical, and we could try to pick the over/under
+	// depending on whether this pressure is higher or lower than the average.
+	// Right now it's just strictly alternating when you have multiple gas
+	// pressures.
 
-	double print_y_offset[8][2] = { { 0, -0.5 }, { 0, -0.5 }, { 0, -0.5 }, { 0, -0.5 }, { 0, -0.5 } ,{ 0, -0.5 }, { 0, -0.5 }, { 0, -0.5 } };
-	// CCR dives: These are offset values used to print the gas lables and pressures on a CCR dive profile at
-	// appropriate Y-coordinates: One doublet of values for each of 8 cylinders.
-	// Order of offsets within a doublet: gas lable offset; gas pressure offset.
-	// The array is initialised with default values that apply to non-CCR dives.
+	QFlags<Qt::AlignmentFlag> alignVar = Qt::AlignTop;
+	QFlags<Qt::AlignmentFlag> align[MAX_CYLINDERS];
 
-	bool offsets_initialised = false;
-	int o2cyl = -1, dilcyl = -1;
-	QFlags<Qt::AlignmentFlag> alignVar= Qt::AlignTop, align_dil = Qt::AlignBottom, align_o2 = Qt::AlignTop;
 	double axisRange = (vAxis->maximum() - vAxis->minimum())/1000;	// Convert axis pressure range to bar
 	double axisLog = log10(log10(axisRange));
+
 	for (int i = 0, count = dataModel->rowCount(); i < count; i++) {
-		entry = dataModel->data().entry + i;
-		mbar = GET_PRESSURE(entry);
-		if (displayed_dive.dc.divemode == CCR && displayed_dive.oxygen_cylinder_index >= 0)
-			o2mbar = GET_O2CYLINDER_PRESSURE(entry);
+		struct plot_data *entry = dataModel->data().entry + i;
 
-		if (o2mbar) {	// If there is an o2mbar value then this is a CCR dive. Then do:
-			// The first time an o2 value is detected, see if the oxygen cyl pressure graph starts above or below the dil graph
-			if (!offsets_initialised) {	// Initialise the parameters for placing the text correctly near the graph line:
-				o2cyl = displayed_dive.oxygen_cylinder_index;
-				dilcyl = displayed_dive.diluent_cylinder_index;
-				if ((o2mbar > mbar)) {	// If above, write o2 start cyl pressure above graph and diluent pressure below graph:
-					print_y_offset[o2cyl][0] = -7 * axisLog; // y offset for oxygen gas lable (above); pressure offsets=-0.5, already initialised
-					print_y_offset[dilcyl][0] = 5 * axisLog; // y offset for diluent gas lable (below)
-				} else {				// ... else write o2 start cyl pressure below graph:
-					print_y_offset[o2cyl][0]  = 5 * axisLog; // o2 lable & pressure below graph; pressure offsets=-0.5, already initialised
-					print_y_offset[dilcyl][0] = -7.8 * axisLog;  // and diluent lable above graph.
-					align_dil = Qt::AlignTop;
-					align_o2  = Qt::AlignBottom;
-				}
-				offsets_initialised = true;
-			}
+		for (int cyl = 0; cyl < MAX_CYLINDERS; cyl++) {
+			int mbar = GET_PRESSURE(entry, cyl);
 
-			if (!seen_cyl[displayed_dive.oxygen_cylinder_index]) {	//For o2, on the left of profile, write lable and pressure
-				plotPressureValue(o2mbar, entry->sec, align_o2, print_y_offset[o2cyl][1]);
-				plotGasValue(o2mbar, entry->sec, displayed_dive.cylinder[displayed_dive.oxygen_cylinder_index].gasmix, align_o2, print_y_offset[o2cyl][0]);
-				seen_cyl[displayed_dive.oxygen_cylinder_index] = true;
-			}
-			last_pressure[displayed_dive.oxygen_cylinder_index] = o2mbar;
-			last_time[displayed_dive.oxygen_cylinder_index] = entry->sec;
-			alignVar = align_dil;
-		}
+			if (!mbar)
+				continue;
 
-		if (!mbar)
-			continue;
-
-		if (cyl != (int)entry->cylinderindex) {	// Pressure value near the left hand edge of the profile - other cylinders:
-			cyl = entry->cylinderindex;	// For each other cylinder, write the gas lable and pressure
 			if (!seen_cyl[cyl]) {
-				plotPressureValue(mbar, entry->sec, alignVar, print_y_offset[cyl][1]);
-				plotGasValue(mbar, entry->sec, displayed_dive.cylinder[cyl].gasmix, align_dil, print_y_offset[cyl][0]);
+				double value_y_offset, label_y_offset;
+
+				// Magic Y offset depending on whether we're aliging
+				// the top of the text or the bottom of the text to
+				// the pressure line.
+				value_y_offset = -0.5;
+				if (alignVar & Qt::AlignTop) {
+					label_y_offset = 5 * axisLog;
+				} else {
+					label_y_offset = -7 * axisLog;
+				}
+				plotPressureValue(mbar, entry->sec, alignVar, value_y_offset);
+				plotGasValue(mbar, entry->sec, displayed_dive.cylinder[cyl].gasmix, alignVar, label_y_offset);
 				seen_cyl[cyl] = true;
+
+				/* Alternate alignment as we see cylinder use.. */
+				align[cyl] = alignVar;
+				alignVar ^= Qt::AlignTop | Qt::AlignBottom;
 			}
+			last_pressure[cyl] = mbar;
+			last_time[cyl] = entry->sec;
 		}
-		last_pressure[cyl] = mbar;
-		last_time[cyl] = entry->sec;
 	}
 
-	for (cyl = 0; cyl < MAX_CYLINDERS; cyl++) {	// For each cylinder, on right hand side of profile, write cylinder pressure
-		alignVar = ((o2cyl >= 0) && (cyl == displayed_dive.oxygen_cylinder_index)) ? align_o2 : align_dil;
+	// For each cylinder, on right hand side of profile, write cylinder pressure
+	for (int cyl = 0; cyl < MAX_CYLINDERS; cyl++) {
 		if (last_time[cyl]) {
-			plotPressureValue(last_pressure[cyl], last_time[cyl], (alignVar | Qt::AlignLeft), print_y_offset[cyl][1]);
+			double value_y_offset = -0.5;
+			plotPressureValue(last_pressure[cyl], last_time[cyl], align[cyl] | Qt::AlignLeft, value_y_offset);
 		}
 	}
 }
@@ -797,7 +773,7 @@ void DiveGasPressureItem::plotPressureValue(int mbar, int sec, QFlags<Qt::Alignm
 	int pressure = get_pressure_units(mbar, &unit);
 	DiveTextItem *text = new DiveTextItem(this);
 	text->setPos(hAxis->posAtValue(sec), vAxis->posAtValue(mbar) + pressure_offset );
-	text->setText(QString("%1 %2").arg(pressure).arg(unit));
+	text->setText(QString("%1%2").arg(pressure).arg(unit));
 	text->setAlignment(align);
 	text->setBrush(getColor(PRESSURE_TEXT));
 	texts.push_back(text);
@@ -814,11 +790,8 @@ void DiveGasPressureItem::plotGasValue(int mbar, int sec, struct gasmix gasmix, 
 	texts.push_back(text);
 }
 
-void DiveGasPressureItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget)
+void DiveGasPressureItem::paint(QPainter *painter, const QStyleOptionGraphicsItem*, QWidget*)
 {
-	Q_UNUSED(option);
-	Q_UNUSED(widget);
-
 	if (polygon().isEmpty())
 		return;
 	QPen pen;
@@ -829,10 +802,14 @@ void DiveGasPressureItem::paint(QPainter *painter, const QStyleOptionGraphicsIte
 	Q_FOREACH (const QPolygonF &poly, polygons) {
 		entry = dataModel->data().entry;
 		for (int i = 1, count = poly.count(); i < count; i++, entry++) {
-			if (entry->sac)
-				pen.setBrush(getSacColor(entry->sac, displayed_dive.sac));
-			else
-				pen.setBrush(MED_GRAY_HIGH_TRANS);
+			if (!in_planner()) {
+				if (entry->sac)
+					pen.setBrush(getSacColor(entry->sac, displayed_dive.sac));
+				else
+					pen.setBrush(MED_GRAY_HIGH_TRANS);
+			} else {
+				pen.setBrush(getPressureColor(entry->density));
+			}
 			painter->setPen(pen);
 			painter->drawLine(poly[i - 1], poly[i]);
 		}
@@ -889,9 +866,8 @@ DiveCalculatedTissue::DiveCalculatedTissue(ProfileWidget2 *widget) : DiveCalcula
 	connect(SettingsObjectWrapper::instance()->techDetails, &TechnicalDetailsSettings::calcceilingChanged, this, &DiveCalculatedTissue::setVisible);
 }
 
-void DiveCalculatedTissue::setVisible(bool visible)
+void DiveCalculatedTissue::setVisible(bool)
 {
-	Q_UNUSED(visible);
 	settingsChanged();
 }
 
@@ -969,16 +945,28 @@ void PartialPressureGasItem::modelDataChanged(const QModelIndex &topLeft, const 
 	QPolygonF poly;
 	QPolygonF alertpoly;
 	alertPolygons.clear();
-	double threshold = 0.0;
-	if (thresholdPtr)
-		threshold = *thresholdPtr;
+	double threshold_min = 100.0; // yes, a ridiculous high partial pressure
+	double threshold_max = 0.0;
+	if (thresholdPtrMax)
+		threshold_max = *thresholdPtrMax;
+	if (thresholdPtrMin)
+		threshold_min = *thresholdPtrMin;
 	bool inAlertFragment = false;
 	for (int i = 0; i < dataModel->rowCount(); i++, entry++) {
 		double value = dataModel->index(i, vDataColumn).data().toDouble();
 		int time = dataModel->index(i, hDataColumn).data().toInt();
 		QPointF point(hAxis->posAtValue(time), vAxis->posAtValue(value));
 		poly.push_back(point);
-		if (value >= threshold) {
+		if (thresholdPtrMax && value >= threshold_max) {
+			if (inAlertFragment) {
+				alertPolygons.back().push_back(point);
+			} else {
+				alertpoly.clear();
+				alertpoly.push_back(point);
+				alertPolygons.append(alertpoly);
+				inAlertFragment = true;
+			}
+		} else if (thresholdPtrMin && value <= threshold_min) {
 			if (inAlertFragment) {
 				alertPolygons.back().push_back(point);
 			} else {
@@ -997,11 +985,8 @@ void PartialPressureGasItem::modelDataChanged(const QModelIndex &topLeft, const 
 	*/
 }
 
-void PartialPressureGasItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget)
+void PartialPressureGasItem::paint(QPainter *painter, const QStyleOptionGraphicsItem*, QWidget*)
 {
-	Q_UNUSED(option);
-	Q_UNUSED(widget);
-
 	const qreal pWidth = 0.0;
 	painter->save();
 	painter->setPen(QPen(normalColor, pWidth));
@@ -1014,13 +999,15 @@ void PartialPressureGasItem::paint(QPainter *painter, const QStyleOptionGraphics
 	painter->restore();
 }
 
-void PartialPressureGasItem::setThreshouldSettingsKey(double *prefPointer)
+void PartialPressureGasItem::setThresholdSettingsKey(double *prefPointerMin, double *prefPointerMax)
 {
-	thresholdPtr = prefPointer;
+	thresholdPtrMin = prefPointerMin;
+	thresholdPtrMax = prefPointerMax;
 }
 
 PartialPressureGasItem::PartialPressureGasItem() :
-	thresholdPtr(NULL)
+	thresholdPtrMin(NULL),
+	thresholdPtrMax(NULL)
 {
 }
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #ifndef CLOUD_STORAGE_H
 #define CLOUD_STORAGE_H
 
@@ -20,7 +21,6 @@ slots:
 private:
 	QNetworkReply *reply;
 	QString userAgent;
-	bool verbose;
 };
 
 QNetworkAccessManager *manager();

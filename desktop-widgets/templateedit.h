@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #ifndef TEMPLATEEDIT_H
 #define TEMPLATEEDIT_H
 
@@ -19,6 +20,8 @@ private slots:
 	void on_fontsize_valueChanged(int font_size);
 
 	void on_linespacing_valueChanged(double line_spacing);
+
+	void on_borderwidth_valueChanged(double border_width);
 
 	void on_fontSelection_currentIndexChanged(int index);
 

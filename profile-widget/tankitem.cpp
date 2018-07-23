@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "profile-widget/tankitem.h"
 #include "qt-models/diveplotdatamodel.h"
 #include "profile-widget/divetextitem.h"
@@ -30,6 +31,7 @@ TankItem::TankItem(QObject *parent) :
 	trimixGradient.setColorAt(1.0, red);
 	trimix = trimixGradient;
 	air = blue;
+	hAxis = Q_NULLPTR;
 	memset(&diveCylinderStore, 0, sizeof(diveCylinderStore));
 }
 
@@ -80,10 +82,8 @@ void TankItem::createBar(qreal x, qreal w, struct gasmix *gas)
 	label->setZValue(101);
 }
 
-void TankItem::modelDataChanged(const QModelIndex &topLeft, const QModelIndex &bottomRight)
+void TankItem::modelDataChanged(const QModelIndex&, const QModelIndex&)
 {
-	Q_UNUSED(topLeft);
-	Q_UNUSED(bottomRight);
 	// We don't have enougth data to calculate things, quit.
 	if (!dataModel || !pInfoEntry || !pInfoNr)
 		return;
@@ -94,29 +94,32 @@ void TankItem::modelDataChanged(const QModelIndex &topLeft, const QModelIndex &b
 	}
 	rects.clear();
 
-	// walk the list and figure out which tanks go where
-	struct plot_data *entry = pInfoEntry;
-	struct plot_data *lastentry = pInfoEntry;
-	int cylIdx = entry->cylinderindex;
-	int i = -1;
-	int startTime = 0;
-	struct gasmix *gas = &diveCylinderStore.cylinder[cylIdx].gasmix;
 	qreal width, left;
-	while (++i < pInfoNr) {
-		entry = &pInfoEntry[i];
-		lastentry = &pInfoEntry[i-1];
-		if (entry->cylinderindex == cylIdx)
-			continue;
-		width = hAxis->posAtValue(lastentry->sec) - hAxis->posAtValue(startTime);
+
+	// Find correct end of the dive plot for correct end of the tankbar
+	struct plot_data *last_entry = &pInfoEntry[pInfoNr-1];
+
+	// get the information directly from the displayed_dive (the dc always exists)
+	struct divecomputer *dc = get_dive_dc(&displayed_dive, dc_number);
+
+	// start with the first gasmix and at the start of the dive
+	int cyl = explicit_first_cylinder(&displayed_dive, dc);
+	struct gasmix *gasmix = &displayed_dive.cylinder[cyl].gasmix;
+	int startTime = 0;
+
+	// work through all the gas changes and add the rectangle for each gas while it was used
+	struct event *ev = get_next_event(dc->events, "gaschange");
+	while (ev && (int)ev->time.seconds < last_entry->sec) {
+		width = hAxis->posAtValue(ev->time.seconds) - hAxis->posAtValue(startTime);
 		left = hAxis->posAtValue(startTime);
-		createBar(left, width, gas);
-		cylIdx = entry->cylinderindex;
-		gas = &diveCylinderStore.cylinder[cylIdx].gasmix;
-		startTime = lastentry->sec;
+		createBar(left, width, gasmix);
+		startTime = ev->time.seconds;
+		gasmix = get_gasmix_from_event(&displayed_dive, ev);
+		ev = get_next_event(ev->next, "gaschange");
 	}
-	width = hAxis->posAtValue(entry->sec) - hAxis->posAtValue(startTime);
+	width = hAxis->posAtValue(last_entry->sec) - hAxis->posAtValue(startTime);
 	left = hAxis->posAtValue(startTime);
-	createBar(left, width, gas);
+	createBar(left, width, gasmix);
 }
 
 void TankItem::setHorizontalAxis(DiveCartesianAxis *horizontal)

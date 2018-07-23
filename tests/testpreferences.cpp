@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "testpreferences.h"
 
 #include "core/subsurface-qt/SettingsObjectWrapper.h"
@@ -11,70 +12,23 @@ pref->sync(); \
 pref->load(); \
 QCOMPARE(METHOD, VALUE);
 
+void TestPreferences::initTestCase()
+{
+	QCoreApplication::setOrganizationName("Subsurface");
+	QCoreApplication::setOrganizationDomain("subsurface.hohndel.org");
+	QCoreApplication::setApplicationName("SubsurfaceTestPreferences");
+}
 
 void TestPreferences::testPreferences()
 {
 	auto pref = SettingsObjectWrapper::instance();
 	pref->load();
 
-	auto cloud = pref->cloud_storage;
-	cloud->setBackgroundSync(true);
-	TEST(cloud->backgroundSync(), true);
-	cloud->setBackgroundSync(false);
-	TEST(cloud->backgroundSync(), false);
-
-	cloud->setBaseUrl("test_one");
-	TEST(cloud->baseUrl(), QStringLiteral("test_one"));
-	cloud->setBaseUrl("test_two");
-	TEST(cloud->baseUrl(), QStringLiteral("test_two"));
-
-	cloud->setEmail("tomaz@subsurface.com");
-	TEST(cloud->email(), QStringLiteral("tomaz@subsurface.com"));
-	cloud->setEmail("tomaz@gmail.com");
-	TEST(cloud->email(), QStringLiteral("tomaz@gmail.com"));
-
-	cloud->setGitLocalOnly(true);
-	TEST(cloud->gitLocalOnly(), true);
-	cloud->setGitLocalOnly(false);
-	TEST(cloud->gitLocalOnly(), false);
-
-	// Why there's new password and password on the prefs?
-	cloud->setNewPassword("ABCD");
-	TEST(cloud->newPassword(), QStringLiteral("ABCD"));
-	cloud->setNewPassword("ABCDE");
-	TEST(cloud->newPassword(), QStringLiteral("ABCDE"));
-
-	cloud->setPassword("ABCDE");
-	TEST(cloud->password(), QStringLiteral("ABCDE"));
-	cloud->setPassword("ABCABC");
-	TEST(cloud->password(), QStringLiteral("ABCABC"));
-
-	cloud->setSavePasswordLocal(true);
-	TEST(cloud->savePasswordLocal(), true);
-	cloud->setSavePasswordLocal(false);
-	TEST(cloud->savePasswordLocal(), false);
-
-	// Why this is short and not bool?
-	cloud->setSaveUserIdLocal(1);
-	TEST(cloud->saveUserIdLocal(), (short)1);
-	cloud->setSaveUserIdLocal(0);
-	TEST(cloud->saveUserIdLocal(), (short)0);
-
-	cloud->setUserId("Tomaz");
-	TEST(cloud->userId(), QStringLiteral("Tomaz"));
-	cloud->setUserId("Zamot");
-	TEST(cloud->userId(), QStringLiteral("Zamot"));
-
-	cloud->setVerificationStatus(0);
-	TEST(cloud->verificationStatus(), (short)0);
-	cloud->setVerificationStatus(1);
-	TEST(cloud->verificationStatus(), (short)1);
-
 	auto tecDetails = pref->techDetails;
-	tecDetails->setModp02(0.2);
-	TEST(tecDetails->modp02(), 0.2);
-	tecDetails->setModp02(1.0);
-	TEST(tecDetails->modp02(), 1.0);
+	tecDetails->setModpO2(0.2);
+	TEST(tecDetails->modpO2(), 0.2);
+	tecDetails->setModpO2(1.0);
+	TEST(tecDetails->modpO2(), 1.0);
 
 	tecDetails->setGflow(2);
 	TEST(tecDetails->gflow(), 2);
@@ -125,8 +79,6 @@ void TestPreferences::testPreferences()
 	TEST(tecDetails->zoomedPlot(), true);
 	tecDetails->setShowSac(true);
 	TEST(tecDetails->showSac(), true);
-	tecDetails->setGfLowAtMaxDepth(true);
-	TEST(tecDetails->gfLowAtMaxDepth(), true);
 	tecDetails->setDisplayUnusedTanks(true);
 	TEST(tecDetails->displayUnusedTanks(), true);
 	tecDetails->setShowAverageDepth(true);
@@ -168,8 +120,6 @@ void TestPreferences::testPreferences()
 	TEST(tecDetails->zoomedPlot(), false);
 	tecDetails->setShowSac(false);
 	TEST(tecDetails->showSac(), false);
-	tecDetails->setGfLowAtMaxDepth(false);
-	TEST(tecDetails->gfLowAtMaxDepth(), false);
 	tecDetails->setDisplayUnusedTanks(false);
 	TEST(tecDetails->displayUnusedTanks(), false);
 	tecDetails->setShowAverageDepth(false);
@@ -181,30 +131,34 @@ void TestPreferences::testPreferences()
 	pp->setShowPn2(false);
 	pp->setShowPhe(false);
 	pp->setShowPo2(false);
-	pp->setPo2Threshold(1.0);
-	pp->setPn2Threshold(2.0);
-	pp->setPheThreshold(3.0);
+	pp->setPo2ThresholdMin(1.0);
+	pp->setPo2ThresholdMax(2.0);
+	pp->setPn2Threshold(3.0);
+	pp->setPheThreshold(4.0);
 
-	TEST(pp->showPn2(), (short) false);
-	TEST(pp->showPhe(), (short) false);
-	TEST(pp->showPo2(), (short) false);
-	TEST(pp->pn2Threshold(), 2.0);
-	TEST(pp->pheThreshold(), 3.0);
-	TEST(pp->po2Threshold(), 1.0);
+	TEST(pp->showPn2(), false);
+	TEST(pp->showPhe(), false);
+	TEST(pp->showPo2(), false);
+	TEST(pp->pn2Threshold(), 3.0);
+	TEST(pp->pheThreshold(), 4.0);
+	TEST(pp->po2ThresholdMin(), 1.0);
+	TEST(pp->po2ThresholdMax(), 2.0);
 
 	pp->setShowPn2(true);
 	pp->setShowPhe(true);
 	pp->setShowPo2(true);
-	pp->setPo2Threshold(4.0);
-	pp->setPn2Threshold(5.0);
-	pp->setPheThreshold(6.0);
+	pp->setPo2ThresholdMin(4.0);
+	pp->setPo2ThresholdMax(5.0);
+	pp->setPn2Threshold(6.0);
+	pp->setPheThreshold(7.0);
 
-	TEST(pp->showPn2(), (short) true);
-	TEST(pp->showPhe(), (short) true);
-	TEST(pp->showPo2(), (short) true);
-	TEST(pp->pn2Threshold(), 5.0);
-	TEST(pp->pheThreshold(), 6.0);
-	TEST(pp->po2Threshold(), 4.0);
+	TEST(pp->showPn2(), true);
+	TEST(pp->showPhe(), true);
+	TEST(pp->showPo2(), true);
+	TEST(pp->pn2Threshold(), 6.0);
+	TEST(pp->pheThreshold(), 7.0);
+	TEST(pp->po2ThresholdMin(), 4.0);
+	TEST(pp->po2ThresholdMax(), 5.0);
 
 	auto fb = pref->facebook;
 	fb->setAccessToken("rand-access-token");
@@ -224,14 +178,6 @@ void TestPreferences::testPreferences()
 	TEST(fb->albumId(),    QStringLiteral("album-id-2"));
 
 	auto geo = pref->geocoding;
-	geo->setEnableGeocoding(true);
-	geo->setParseDiveWithoutGps(true);
-	geo->setTagExistingDives(true);
-
-	TEST(geo->enableGeocoding(),true);
-	TEST(geo->parseDiveWithoutGps(),true);
-	TEST(geo->tagExistingDives(),true);
-
 	geo->setFirstTaxonomyCategory(TC_NONE);
 	geo->setSecondTaxonomyCategory(TC_OCEAN);
 	geo->setThirdTaxonomyCategory(TC_COUNTRY);
@@ -239,14 +185,6 @@ void TestPreferences::testPreferences()
 	TEST(geo->firstTaxonomyCategory(), TC_NONE);
 	TEST(geo->secondTaxonomyCategory(), TC_OCEAN);
 	TEST(geo->thirdTaxonomyCategory(), TC_COUNTRY);
-
-	geo->setEnableGeocoding(false);
-	geo->setParseDiveWithoutGps(false);
-	geo->setTagExistingDives(false);
-
-	TEST(geo->enableGeocoding(),false);
-	TEST(geo->parseDiveWithoutGps(),false);
-	TEST(geo->tagExistingDives(),false);
 
 	geo->setFirstTaxonomyCategory(TC_OCEAN);
 	geo->setSecondTaxonomyCategory(TC_COUNTRY);
@@ -459,23 +397,6 @@ void TestPreferences::testPreferences()
 	TEST(general->pscrRatio(), 1);
 	TEST(general->useDefaultFile(), false);
 
-	auto display = pref->display_settings;
-	display->setDivelistFont("comic");
-	display->setFontSize(10.0);
-	display->setDisplayInvalidDives(true);
-
-	TEST(display->divelistFont(),QStringLiteral("comic"));
-	TEST(display->fontSize(), 10.0);
-	TEST(display->displayInvalidDives(),(short) true); //TODO: this is true / false.
-
-	display->setDivelistFont("helvetica");
-	display->setFontSize(14.0);
-	display->setDisplayInvalidDives(false);
-
-	TEST(display->divelistFont(),QStringLiteral("helvetica"));
-	TEST(display->fontSize(), 14.0);
-	TEST(display->displayInvalidDives(),(short) false);
-
 	auto language = pref->language_settings;
 	language->setLangLocale         ("en_US");
 	language->setLanguage           ("en");
@@ -513,11 +434,6 @@ void TestPreferences::testPreferences()
 	TEST(language->dateFormatOverride(),true);
 	TEST(language->useSystemLanguage(), true);
 
-	pref->animation_settings->setAnimationSpeed(20);
-	TEST(pref->animation_settings->animationSpeed(), 20);
-	pref->animation_settings->setAnimationSpeed(30);
-	TEST(pref->animation_settings->animationSpeed(), 30);
-
 	auto location = pref->location_settings;
 	location->setTimeThreshold(10);
 	location->setDistanceThreshold(20);
@@ -542,7 +458,7 @@ void TestPreferences::testPreferences()
 	TEST(update->lastVersionUsed(), QStringLiteral("tomaz-1"));
 	TEST(update->nextCheck(), date);
 
-	date.addDays(3);
+	date = date.addDays(3);
 	update->setDontCheckForUpdates(false);
 	update->setLastVersionUsed("tomaz-2");
 	update->setNextCheck(date);

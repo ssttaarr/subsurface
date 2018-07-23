@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #ifndef DOWNLOADFROMDIVECOMPUTER_H
 #define DOWNLOADFROMDIVECOMPUTER_H
 
@@ -9,6 +10,8 @@
 
 #include "core/libdivecomputer.h"
 #include "desktop-widgets/configuredivecomputerdialog.h"
+#include "core/downloadfromdcthread.h"
+
 #include "ui_downloadfromdivecomputer.h"
 
 #if defined(BT_SUPPORT)
@@ -16,43 +19,7 @@
 #endif
 
 class QStringListModel;
-
-class DownloadThread : public QThread {
-	Q_OBJECT
-public:
-	DownloadThread(QObject *parent, device_data_t *data);
-	virtual void run();
-
-	QString error;
-
-private:
-	device_data_t *data;
-};
-
-class DiveImportedModel : public QAbstractTableModel
-{
-	Q_OBJECT
-public:
-	DiveImportedModel(QObject *o);
-	int columnCount(const QModelIndex& index = QModelIndex()) const;
-	int rowCount(const QModelIndex& index = QModelIndex()) const;
-	QVariant data(const QModelIndex& index, int role) const;
-	QVariant headerData(int section, Qt::Orientation orientation, int role) const;
-	void setImportedDivesIndexes(int first, int last);
-	Qt::ItemFlags flags(const QModelIndex &index) const;
-	void clearTable();
-
-public
-slots:
-	void changeSelected(QModelIndex clickedIndex);
-	void selectAll();
-	void selectNone();
-
-private:
-	int firstIndex;
-	int lastIndex;
-	bool *checkStates;
-};
+class DiveImportedModel;
 
 class DownloadFromDCWidget : public QDialog {
 	Q_OBJECT
@@ -91,23 +58,17 @@ slots:
 private:
 	void markChildrenAsDisabled();
 	void markChildrenAsEnabled();
+	void updateDeviceEnabled();
 
+	QStringListModel vendorModel;
+	QStringListModel productModel;
 	Ui::DownloadFromDiveComputer ui;
-	DownloadThread *thread;
+	DownloadThread thread;
 	bool downloading;
 
-	QStringList vendorList;
-	QHash<QString, QStringList> productList;
-	QMap<QString, dc_descriptor_t *> descriptorLookup;
-	device_data_t data;
 	int previousLast;
 
-	QStringListModel *vendorModel;
-	QStringListModel *productModel;
-	void fill_computer_list();
 	void fill_device_list(int dc_type);
-	QString logFile;
-	QString dumpFile;
 	QTimer *timer;
 	bool dumpWarningShown;
 	OstcFirmwareCheck *ostcFirmwareCheck;

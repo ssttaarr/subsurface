@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * divelistview.cpp
  *
@@ -17,15 +18,12 @@
 #include <QNetworkReply>
 #include <QStandardPaths>
 #include <QMessageBox>
+#include <QHeaderView>
 #include "core/qthelper.h"
 #include "desktop-widgets/undocommands.h"
 #include "desktop-widgets/divelistview.h"
 #include "qt-models/divepicturemodel.h"
 #include "core/metrics.h"
-#include "core/helpers.h"
-
-//                                #  Date  Rtg Dpth  Dur  Tmp Wght Suit  Cyl  Gas  SAC  OTU  CNS  Px  Loc
-static int defaultWidth[] =    {  70, 140, 90,  50,  50,  50,  50,  70,  50,  50,  70,  50,  50,  5, 500};
 
 DiveListView::DiveListView(QWidget *parent) : QTreeView(parent), mouseClickSelection(false), sortColumn(0),
 	currentOrder(Qt::DescendingOrder), dontEmitDiveChangedSignal(false), selectionSaved(false)
@@ -57,7 +55,7 @@ DiveListView::DiveListView(QWidget *parent) : QTreeView(parent), mouseClickSelec
 
 	// TODO FIXME we need this to get the header names
 	// can we find a smarter way?
-	DiveTripModel *tripModel = new DiveTripModel(this);
+	tripModel = new DiveTripModel(this);
 
 	// set the default width as a minimum between the hard-coded defaults,
 	// the header text width and the (assumed) content width, calculated
@@ -93,8 +91,8 @@ DiveListView::DiveListView(QWidget *parent) : QTreeView(parent), mouseClickSelec
 		if (sw > width)
 			width = sw;
 		width += zw; // small padding
-		if (width > defaultWidth[col])
-			defaultWidth[col] = width;
+		if (width > tripModel->columnWidth(col))
+			tripModel->setColumnWidth(col, width);
 	}
 	delete tripModel;
 
@@ -113,7 +111,7 @@ DiveListView::~DiveListView()
 		if (isColumnHidden(i))
 			continue;
 		// we used to hardcode them all to 100 - so that might still be in the settings
-		if (columnWidth(i) == 100 || columnWidth(i) == defaultWidth[i])
+		if (columnWidth(i) == 100 || columnWidth(i) == tripModel->columnWidth(i))
 			settings.remove(QString("colwidth%1").arg(i));
 		else
 			settings.setValue(QString("colwidth%1").arg(i), columnWidth(i));
@@ -139,7 +137,7 @@ void DiveListView::setupUi()
 		if (width.isValid())
 			setColumnWidth(i, width.toInt());
 		else
-			setColumnWidth(i, defaultWidth[i]);
+			setColumnWidth(i, tripModel->columnWidth(i));
 	}
 	settings.endGroup();
 	if (firstRun)
@@ -426,13 +424,12 @@ void DiveListView::reload(DiveTripModel::Layout layout, bool forceSort)
 
 	QSortFilterProxyModel *m = qobject_cast<QSortFilterProxyModel *>(model());
 	QAbstractItemModel *oldModel = m->sourceModel();
-	if (oldModel) {
-		oldModel->deleteLater();
-	}
-	DiveTripModel *tripModel = new DiveTripModel(this);
+	tripModel = new DiveTripModel(this);
 	tripModel->setLayout(layout);
 
 	m->setSourceModel(tripModel);
+	if (oldModel)
+		delete oldModel;
 
 	if (!forceSort)
 		return;
@@ -482,7 +479,8 @@ void DiveListView::reloadHeaderActions()
 						    i == DiveTripModel::TOTALWEIGHT ||
 						    i == DiveTripModel::SUIT ||
 						    i == DiveTripModel::CYLINDER ||
-						    i == DiveTripModel::SAC);
+						    i == DiveTripModel::SAC ||
+						    i == DiveTripModel::TAGS);
 			bool shown = s.value(settingName, showHeaderFirstRun).toBool();
 			a->setCheckable(true);
 			a->setChecked(shown);
@@ -516,9 +514,8 @@ void DiveListView::toggleColumnVisibilityByIndex()
 	setColumnWidth(lastVisibleColumn(), 10);
 }
 
-void DiveListView::currentChanged(const QModelIndex &current, const QModelIndex &previous)
+void DiveListView::currentChanged(const QModelIndex &current, const QModelIndex&)
 {
-	Q_UNUSED(previous)
 	if (!isVisible())
 		return;
 	if (!current.isValid())
@@ -583,8 +580,8 @@ static bool can_merge(const struct dive *a, const struct dive *b, enum asked_use
 	if (dive_endtime(a) + 30 * 60 < b->when) {
 		if (*have_asked == NOTYET) {
 			if (QMessageBox::warning(MainWindow::instance(),
-						 MainWindow::instance()->tr("Warning"),
-						 MainWindow::instance()->tr("Trying to merge dives with %1min interval in between").arg(
+						 MainWindow::tr("Warning"),
+						 MainWindow::tr("Trying to merge dives with %1min interval in between").arg(
 							 (b->when - dive_endtime(a)) / 60),
 					     QMessageBox::Ok | QMessageBox::Cancel) == QMessageBox::Cancel) {
 				*have_asked = DONTMERGE;
@@ -720,11 +717,20 @@ void DiveListView::addToTripAbove()
 
 void DiveListView::addToTrip(int delta)
 {
-	// if there is a trip above / below, then it's a sibling at the same
-	// level as this dive. So let's take a look
+	// d points to the row that has (mouse-)pointer focus, and there are nr rows selected
 	struct dive *d = (struct dive *)contextMenuIndex.data(DiveTripModel::DIVE_ROLE).value<void *>();
-	QModelIndex t = contextMenuIndex.sibling(contextMenuIndex.row() + delta, 0);
-	dive_trip_t *trip = (dive_trip_t *)t.data(DiveTripModel::TRIP_ROLE).value<void *>();
+	int nr = selectionModel()->selectedRows().count();
+	QModelIndex t;
+	dive_trip_t *trip = NULL;
+
+	// now look for the trip to add to, for this, loop over the selected dives and
+	// check if its sibling is a trip.
+	for (int i = 1; i <= nr; i++) {
+		t = contextMenuIndex.sibling(contextMenuIndex.row() + (delta > 0 ? i: i * -1), 0);
+		trip = (dive_trip_t *)t.data(DiveTripModel::TRIP_ROLE).value<void *>();
+		if (trip)
+			break;
+	}
 
 	if (!trip || !d)
 		// no dive, no trip? get me out of here
@@ -916,7 +922,18 @@ void DiveListView::shiftTimes()
 
 void DiveListView::loadImages()
 {
-	QStringList fileNames = QFileDialog::getOpenFileNames(this, tr("Open image files"), lastUsedImageDir(), tr("Image files (*.jpg *.jpeg *.pnm *.tif *.tiff)"));
+	QStringList m_filters = mediaExtensionFilters();
+	QStringList i_filters = imageExtensionFilters();
+	QStringList v_filters = videoExtensionFilters();
+	QStringList fileNames = QFileDialog::getOpenFileNames(this,
+							      tr("Open media files"),
+							      lastUsedImageDir(),
+							      QString("%1 (%2);;%3 (%4);;%5 (%6);;%7 (*.*)")
+							      .arg(tr("Media files"), m_filters.join(" ")
+							      , tr("Image files"), i_filters.join(" ")
+							      , tr("Video files"), v_filters.join(" ")
+							      , tr("All files")));
+
 	if (fileNames.isEmpty())
 		return;
 	updateLastUsedImageDir(QFileInfo(fileNames[0]).dir().path());
@@ -937,7 +954,7 @@ void DiveListView::matchImagesToDives(QStringList fileNames)
 		for_each_dive (j, dive) {
 			if (!dive->selected)
 				continue;
-			dive_create_picture(dive, copy_string(fileName.toUtf8().data()), shiftDialog.amount(), shiftDialog.matchAll());
+			dive_create_picture(dive, copy_qstring(fileName), shiftDialog.amount(), shiftDialog.matchAll());
 		}
 	}
 
@@ -971,13 +988,12 @@ void DiveListView::loadImageFromURL(QUrl url)
 		if (image.isNull()) {
 			// If this is not an image, maybe it's an html file and Miika can provide some xslr magic to extract images.
 			// In this case we would call the function recursively on the list of image source urls;
-			MainWindow::instance()->getNotificationWidget()->showNotification(tr("%1 does not appear to be an image").arg(url.toString()), KMessageWidget::Error);
+			report_error(qPrintable(tr("%1 does not appear to be an image").arg(url.toString())));
 			return;
 		}
 
-		// Since we already downloaded the image we can cache it as well.
 		QCryptographicHash hash(QCryptographicHash::Sha1);
-		hash.addData(imageData);
+		hash.addData(url.toString().toUtf8());
 		QString path = QStandardPaths::standardLocations(QStandardPaths::CacheLocation).first();
 		QDir dir(path);
 		if (!dir.exists())
@@ -988,11 +1004,7 @@ void DiveListView::loadImageFromURL(QUrl url)
 			stream.writeRawData(imageData.data(), imageData.length());
 			imageFile.waitForBytesWritten(-1);
 			imageFile.close();
-			add_hash(imageFile.fileName(), hash.result());
-			struct picture picture;
-			picture.hash = NULL;
-			picture.filename = strdup(url.toString().toUtf8().data());
-			learnHash(&picture, hash.result());
+			learnPictureFilename(url.toString(), imageFile.fileName());
 			matchImagesToDives(QStringList(url.toString()));
 		}
 	}
@@ -1005,8 +1017,8 @@ QString DiveListView::lastUsedImageDir()
 
 	settings.beginGroup("FileDialog");
 	if (settings.contains("LastImageDir"))
-		if (QDir::setCurrent(settings.value("LastImageDir").toString()))
-			lastImageDir = settings.value("LastIamgeDir").toString();
+		if (QDir(settings.value("LastImageDir").toString()).exists())
+			lastImageDir = settings.value("LastImageDir").toString();
 	return lastImageDir;
 }
 
@@ -1035,7 +1047,7 @@ void DiveListView::updateLastImageTimeOffset(const int offset)
 	s.setValue("LastImageTimeOffset", offset);
 }
 
-void DiveListView::mouseDoubleClickEvent(QMouseEvent * event)
+void DiveListView::mouseDoubleClickEvent(QMouseEvent*)
 {
 	return;
 }

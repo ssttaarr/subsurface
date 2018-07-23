@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #ifndef NOTIFICATIONWIDGET_H
 #define NOTIFICATIONWIDGET_H
 
@@ -19,10 +20,12 @@ public:
 	void showNotification(QString message, KMessageWidget::MessageType type);
 	void hideNotification();
 	QString getNotificationText();
-	~NotificationWidget();
 
+public
+slots:
+	void showError(QString message);
 private:
-	QFutureWatcher<void> *future_watcher;
+	QFutureWatcher<void> future_watcher;
 
 private
 slots:
